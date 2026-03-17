@@ -48,11 +48,12 @@ android {
             excludes += '**'
         }
     }
-    lintOptions {
-        checkReleaseBuilds false
-    }
     dependenciesInfo {
         includeInApk false
+    }
+    namespace 'app.rikka.savecopy'
+    lint {
+        checkReleaseBuilds false
     }
 }
 

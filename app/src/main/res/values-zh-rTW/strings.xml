@@ -6,6 +6,7 @@
     <string name="notification_saving_title">正在儲存 %s 的副本</string>
     <string name="notification_saved_title">為 %1$s 儲存副本</string>
     <string name="notification_saved_text">副本位於 %1$s</string>
+    <string name="toast_saved">已儲存：%s 下載</string>
     <string name="notification_error_title">出現了問題</string>
     <string name="notification_error_text">在大多數情況下，問題不由此應用程式引起。</string>
     <string name="dialog_no_permission_title">需要儲存權限</string>

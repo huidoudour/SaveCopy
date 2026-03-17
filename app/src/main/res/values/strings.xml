@@ -6,6 +6,7 @@
     <string name="notification_saving_title">Saving copy of %s</string>
     <string name="notification_saved_title">Saved copy for %1$s</string>
     <string name="notification_saved_text">The copy is located at %1$s</string>
+    <string name="toast_saved">Saved: %s to Download</string>
     <string name="notification_error_title">Something went wrong</string>
     <string name="notification_error_text">In most cases, the problem is not cause by this app.</string>
     <string name="dialog_no_permission_title">Requires storage permission</string>

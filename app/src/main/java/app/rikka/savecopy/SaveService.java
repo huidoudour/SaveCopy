@@ -2,9 +2,6 @@ package app.rikka.savecopy;
 
 import android.annotation.TargetApi;
 import android.app.IntentService;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -22,11 +19,11 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.Html;
 import android.util.Log;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 
@@ -45,12 +42,7 @@ public class SaveService extends IntentService {
 
     private static final String TAG = "SaveService";
 
-    private static final String NOTIFICATION_CHANNEL_PROGRESS = "progress";
-    private static final String NOTIFICATION_CHANNEL_RESULT = "result";
-    private static final int NOTIFICATION_ID_PROGRESS = 1;
-
     private Handler mHandler;
-    private NotificationManager mNotificationManager;
 
     public SaveService() {
         super("save-thread");
@@ -63,85 +55,7 @@ public class SaveService extends IntentService {
     @Override
     public void onCreate() {
         super.onCreate();
-
-        mHandler = new Handler(Looper.getMainLooper(), msg -> {
-            if (msg.obj instanceof Notification.Builder) {
-                mNotificationManager.notify(msg.what, ((Notification.Builder) msg.obj).build());
-                return true;
-            }
-            return false;
-        });
-
-        mNotificationManager = getSystemService(NotificationManager.class);
-        onCreateNotificationChannel(mNotificationManager);
-
-        startForeground(NOTIFICATION_ID_PROGRESS, onStartForeground());
-    }
-
-    public Notification onStartForeground() {
-        Notification.Builder builder = newNotificationBuilder(NOTIFICATION_CHANNEL_PROGRESS, getString(R.string.notification_working_title), null);
-        return builder.build();
-    }
-
-    @TargetApi(Build.VERSION_CODES.O)
-    public void onCreateNotificationChannel(@NonNull NotificationManager nm) {
-        List<NotificationChannel> channels = new ArrayList<>();
-        NotificationChannel channel = new NotificationChannel(
-                NOTIFICATION_CHANNEL_PROGRESS,
-                getString(R.string.notification_channel_progress),
-                NotificationManager.IMPORTANCE_MIN);
-        channel.setSound(null, null);
-        channel.enableLights(false);
-        channel.enableVibration(false);
-        channel.setBypassDnd(true);
-        channel.setShowBadge(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            channel.setAllowBubbles(false);
-        }
-        channels.add(channel);
-
-        channel = new NotificationChannel(
-                NOTIFICATION_CHANNEL_RESULT,
-                getString(R.string.notification_channel_result),
-                NotificationManager.IMPORTANCE_HIGH);
-        channel.setSound(null, null);
-        channel.enableLights(false);
-        channel.enableVibration(false);
-        channel.setBypassDnd(true);
-        channel.setShowBadge(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            channel.setAllowBubbles(false);
-        }
-        channels.add(channel);
-        nm.createNotificationChannels(channels);
-    }
-
-    public Notification.Builder newNotificationBuilder(String channelId, CharSequence title, CharSequence text) {
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? new Notification.Builder(this, channelId) : new Notification.Builder(this);
-        builder.setSmallIcon(R.drawable.ic_notification_24)
-                .setColor(getColor(R.color.notification));
-        if (title != null) {
-            builder.setContentTitle(title);
-        }
-        if (text != null) {
-            builder.setContentText(text);
-        }
-        return builder;
-    }
-
-    private void scheduleNotification(int id, Notification.Builder builder) {
-        scheduleNotification(id, builder, 0);
-    }
-
-    private void scheduleNotification(int id, Notification.Builder builder, long delay) {
-        if (delay == 0) {
-            mHandler.removeMessages(id);
-            mNotificationManager.notify(id, builder.build());
-        } else {
-            if (!mHandler.hasMessages(id)) {
-                mHandler.sendMessageDelayed(Message.obtain(mHandler, id, builder), delay);
-            }
-        }
+        mHandler = new Handler(Looper.getMainLooper());
     }
 
     @Override
@@ -199,20 +113,18 @@ public class SaveService extends IntentService {
                 Log.e(TAG, "save " + data, e);
 
                 Throwable cause = e.getCause() == null ? e : e.getCause();
-                CharSequence notificationTitle = getString(R.string.notification_error_title);
-                CharSequence notificationText = getString(R.string.notification_error_text) + "\n\n" + cause.getMessage();
+                CharSequence errorMessage = getString(R.string.notification_error_text) + "\n\n" + cause.getMessage();
 
-                Notification.Builder builder = newNotificationBuilder(NOTIFICATION_CHANNEL_RESULT, notificationTitle, notificationText)
-                        .setStyle(new Notification.BigTextStyle().bigText(notificationText));
-                scheduleNotification(id[0], builder);
+                // Show error Toast instead of notification
+                mHandler.post(() -> {
+                    Toast.makeText(SaveService.this, errorMessage, Toast.LENGTH_LONG).show();
+                });
             }
         }
     }
 
     private void doSave(Uri data, String type, int[] _id, String callingPackage) throws IOException, SaveException {
         Context context = this;
-        CharSequence notificationTitle, notificationText;
-        Notification.Builder builder;
         if (data == null) {
             throw new SaveException("data is null");
         }
@@ -305,12 +217,7 @@ public class SaveService extends IntentService {
         int id = fileUri.toString().hashCode();
         _id[0] = id;
 
-        notificationTitle = Html.fromHtml(getString(R.string.notification_saving_title,
-                String.format("<font face=\"sans-serif-medium\">%s</font>", displayName)));
-        builder = newNotificationBuilder(NOTIFICATION_CHANNEL_PROGRESS, notificationTitle, null);
-        builder.setProgress(100, 0, true);
-        scheduleNotification(id, builder);
-
+        // No progress notification, only Toast at the end
         OutputStream os = cr.openOutputStream(fileUri, "w");
         if (os == null) {
             throw new SaveException("can't open output");
@@ -323,11 +230,7 @@ public class SaveService extends IntentService {
             os.flush();
 
             writeSize += r;
-            if (totalSize != -1) {
-                int progress = (int) ((float) writeSize / totalSize * 100);
-                builder.setProgress(100, progress, false);
-                scheduleNotification(id, builder, 1000);
-            }
+            // No progress notification updates
         }
         os.close();
         is.close();
@@ -349,34 +252,18 @@ public class SaveService extends IntentService {
                 }
             }
         }
-
-        notificationTitle = getString(R.string.notification_saved_title, displayName);
-        notificationText = Html.fromHtml(getString(R.string.notification_saved_text,
-                String.format("<font face=\"sans-serif-medium\">%s/%s</font>", download, newName)));
-        builder = newNotificationBuilder(NOTIFICATION_CHANNEL_RESULT, notificationTitle, notificationText)
-                .setStyle(new Notification.BigTextStyle().bigText(notificationText));
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            builder.setPriority(Notification.PRIORITY_HIGH)
-                    .setSound(Uri.EMPTY)
-                    .setVibrate(new long[0]);
-        }
-        if (!"application/vnd.android.package-archive".equals(type)) {
-            Intent newIntent = new Intent(Intent.ACTION_VIEW)
-                    .setComponent(null)
-                    .setPackage(null)
-                    .setDataAndType(fileUri, type)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-
-            Intent openIntent = Intent.createChooser(newIntent, getString(R.string.open_with));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                openIntent.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, new ComponentName[]{ComponentName.createRelative(this, SaveActivity.class.getName())});
-            }
-            PendingIntent openPendingIntent = PendingIntent.getActivity(this, id, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            builder.addAction(new Notification.Action.Builder(
-                    Icon.createWithResource(this, R.drawable.ic_notification_open_24),
-                    getString(R.string.notification_action_open),
-                    openPendingIntent).build());
-        }
-        scheduleNotification(id, builder);
+        
+        // Create a final copy for lambda expression
+        final String finalNewName = newName;
+        
+        // Show Toast on success (must be on UI thread)
+        // No notification bar notifications, only Toast
+        mHandler.post(() -> {
+            String toastMessage = getString(R.string.toast_saved, finalNewName);
+            Toast.makeText(SaveService.this, toastMessage, Toast.LENGTH_LONG).show();
+        });
+        
+        // Stop the service after completion
+        stopSelf();
     }
 }
