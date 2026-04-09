@@ -17,13 +17,10 @@ import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
-import android.os.Handler;
-import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.Html;
 import android.util.Log;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 
@@ -40,9 +37,22 @@ public class SaveService extends IntentService {
 
     static final String CALLING_PACKAGE = "callingPackage";
 
-    private static final String TAG = "SaveService";
+    private static final String ACTION_SAVE_COMPLETE = "app.rikka.savecopy.SAVE_COMPLETE";
+    private static final String EXTRA_FILE_NAME = "file_name";
+    private static final String EXTRA_ERROR = "error";
 
-    private Handler mHandler;
+    // Static callback to notify Activity directly (more reliable than broadcast on MIUI)
+    private static SaveCallback sCallback;
+
+    public interface SaveCallback {
+        void onSaveComplete(String fileName, String error);
+    }
+
+    public static void setCallback(SaveCallback callback) {
+        sCallback = callback;
+    }
+
+    private static final String TAG = "SaveService";
 
     public SaveService() {
         super("save-thread");
@@ -50,12 +60,6 @@ public class SaveService extends IntentService {
 
     public SaveService(String name) {
         super("save-thread");
-    }
-
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        mHandler = new Handler(Looper.getMainLooper());
     }
 
     @Override
@@ -96,15 +100,34 @@ public class SaveService extends IntentService {
 
         List<Uri> list = new ArrayList<>();
         if (Intent.ACTION_VIEW.equals(action)) {
-            list.add(intent.getData());
+            Uri data = intent.getData();
+            if (data != null) list.add(data);
         } else if (Intent.ACTION_SEND.equals(action)) {
-            list.add(intent.getParcelableExtra(Intent.EXTRA_STREAM));
+            // First try ArrayList (most common in Android 12+)
+            ArrayList<Uri> uriList = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (uriList != null && !uriList.isEmpty()) {
+                list.addAll(uriList);
+            } else {
+                // Fallback to single Uri
+                Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (uri != null) list.add(uri);
+            }
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             ArrayList<Uri> extras = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
             if (extras != null) {
                 list.addAll(extras);
             }
         }
+
+        // Handle empty list case - notify via callback
+        if (list.isEmpty()) {
+            Log.d(TAG, "List is empty, notifying error");
+            notifyCallback(null, getString(R.string.notification_error_text));
+            stopSelf();
+            return;
+        }
+
+        Log.d(TAG, "List size: " + list.size() + ", processing " + list);
 
         for (Uri data: list) {
             try {
@@ -113,12 +136,9 @@ public class SaveService extends IntentService {
                 Log.e(TAG, "save " + data, e);
 
                 Throwable cause = e.getCause() == null ? e : e.getCause();
-                CharSequence errorMessage = getString(R.string.notification_error_text) + "\n\n" + cause.getMessage();
-
-                // Show error Toast instead of notification
-                mHandler.post(() -> {
-                    Toast.makeText(SaveService.this, errorMessage, Toast.LENGTH_LONG).show();
-                });
+                String errorMessage = getString(R.string.notification_error_text) + "\n\n" + cause.getMessage();
+                notifyCallback(null, errorMessage);
+                stopSelf();
             }
         }
     }
@@ -253,17 +273,23 @@ public class SaveService extends IntentService {
             }
         }
         
-        // Create a final copy for lambda expression
-        final String finalNewName = newName;
-        
-        // Show Toast on success (must be on UI thread)
-        // No notification bar notifications, only Toast
-        mHandler.post(() -> {
-            String toastMessage = getString(R.string.toast_saved, finalNewName);
-            Toast.makeText(SaveService.this, toastMessage, Toast.LENGTH_LONG).show();
-        });
-        
-        // Stop the service after completion
+        // Notify via callback (Activity will show Toast)
+        notifyCallback(newName, null);
         stopSelf();
+    }
+
+    private void notifyCallback(String fileName, String error) {
+        SaveCallback callback = sCallback;
+        if (callback != null) {
+            callback.onSaveComplete(fileName, error);
+        }
+        // Also send broadcast as fallback
+        Intent broadcastIntent = new Intent(ACTION_SAVE_COMPLETE);
+        if (error != null) {
+            broadcastIntent.putExtra(EXTRA_ERROR, error);
+        } else {
+            broadcastIntent.putExtra(EXTRA_FILE_NAME, fileName);
+        }
+        sendBroadcast(broadcastIntent);
     }
 }

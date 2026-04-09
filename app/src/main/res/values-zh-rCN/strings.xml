@@ -1,5 +1,7 @@
 <resources>
     <string name="save_a_copy">保存副本</string>
+    <string name="save_file_copy">保存副本</string>
+    <string name="download_file_copy">下载副本</string>
     <string name="notification_channel_progress">进度</string>
     <string name="notification_channel_result">结果</string>
     <string name="notification_working_title">正在工作中…</string>
@@ -7,6 +9,8 @@
     <string name="notification_saved_title">为 %1$s 保存副本</string>
     <string name="notification_saved_text">副本位于 %1$s</string>
     <string name="toast_saved">已保存：%s 到下载</string>
+    <string name="toast_invalid_uri">无效的下载链接</string>
+    <string name="toast_start_download">开始下载：%s</string>
     <string name="notification_error_title">出现了问题</string>
     <string name="notification_error_text">在大多数情况下，问题不由此应用引起。</string>
     <string name="dialog_no_permission_title">需要存储权限</string>
@@ -19,4 +23,5 @@
     <string name="settings_prefer_app_folder_summary">将副本保存至 Download/&lt;应用名称&gt;。</string>
     <string name="introduction">此应用将“%1$s”加入至“打开方式”及“分享”菜单。当您使用“%1$s”打开或分享文件时，文件的副本将被保存至“Download”文件夹。\n\n为了保持主屏幕整洁，此应用不会在主屏幕应用中显示（一些系统可能强制应用显示）。要卸载，请进入系统设置。</string>
     <string name="dialog_confirmation_message">是否要保存此文件的副本？</string>
+    <string name="choose_action_title">选择操作</string>
 </resources>

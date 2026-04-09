@@ -14,3 +14,5 @@
 .cxx
 /.idea
 signing.properties
+log.txt
+*.log

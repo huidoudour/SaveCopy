@@ -1,5 +1,7 @@
 <resources>
     <string name="save_a_copy">Save a copy</string>
+    <string name="save_file_copy">Save copy</string>
+    <string name="download_file_copy">Download copy</string>
     <string name="notification_channel_progress">Progress</string>
     <string name="notification_channel_result">Result</string>
     <string name="notification_working_title">Working…</string>
@@ -7,6 +9,8 @@
     <string name="notification_saved_title">Saved copy for %1$s</string>
     <string name="notification_saved_text">The copy is located at %1$s</string>
     <string name="toast_saved">Saved: %s to Download</string>
+    <string name="toast_invalid_uri">Invalid download link</string>
+    <string name="toast_start_download">Start downloading: %s</string>
     <string name="notification_error_title">Something went wrong</string>
     <string name="notification_error_text">In most cases, the problem is not cause by this app.</string>
     <string name="dialog_no_permission_title">Requires storage permission</string>
@@ -19,4 +23,5 @@
     <string name="settings_prefer_app_folder_summary">Save the copy to Download/&lt;app name&gt;.</string>
     <string name="introduction">This app adds the \"%1$s\" action to \"Open with\" and \"Share\" menus. When you open or share a file with \"%1$s\", a copy of the file will be saved to the \"Download\" folder.\n\nIn order to keep your home screen clean, this app does not show in the home app (some systems may force the app to show). To uninstall, please go to system settings.</string>
     <string name="dialog_confirmation_message">Save a copy for this file?</string>
+    <string name="choose_action_title">Choose Action</string>
 </resources>

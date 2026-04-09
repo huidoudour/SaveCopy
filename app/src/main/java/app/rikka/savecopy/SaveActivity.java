@@ -3,14 +3,18 @@ package app.rikka.savecopy;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+
+import java.util.ArrayList;
 
 public class SaveActivity extends Activity {
 
@@ -19,6 +23,17 @@ public class SaveActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Register callback for save completion (more reliable than broadcast on MIUI)
+        SaveService.setCallback((fileName, error) -> runOnUiThread(() -> {
+            if (error != null) {
+                Toast.makeText(SaveActivity.this, error, Toast.LENGTH_LONG).show();
+            } else if (fileName != null) {
+                String message = getString(R.string.toast_saved, fileName);
+                Toast.makeText(SaveActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+            finish();
+        }));
 
         String action = getIntent().getAction();
         if (!Intent.ACTION_VIEW.equals(action)
@@ -63,11 +78,38 @@ public class SaveActivity extends Activity {
         Uri referrer = getReferrer();
         if (referrer != null) callingPackage = referrer.getAuthority();
 
-        Intent intent = new Intent(getIntent());
-        intent.setClassName(this, SaveService.class.getName());
+        // Create intent explicitly to ensure data is preserved
+        Intent intent = new Intent(this, SaveService.class);
+        intent.setAction(getIntent().getAction());
+        intent.setDataAndType(getIntent().getData(), getIntent().getType());
         intent.putExtra(SaveService.CALLING_PACKAGE, callingPackage);
+        
+        // Copy EXTRA_STREAM if present - handle both single Uri and ArrayList
+        if (getIntent().hasExtra(Intent.EXTRA_STREAM)) {
+            ArrayList<Uri> streamUris = new ArrayList<>();
+            // Try to get single Uri first (most common case for ACTION_SEND)
+            Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
+            if (singleUri != null) {
+                streamUris.add(singleUri);
+            } else {
+                // If null, try ArrayList (for ACTION_SEND_MULTIPLE or some systems)
+                try {
+                    ArrayList<Uri> arrayList = getIntent().getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                    if (arrayList != null) {
+                        streamUris.addAll(arrayList);
+                    }
+                } catch (ClassCastException e) {
+                    // Ignore, streamUris will be empty
+                }
+            }
+            intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, streamUris);
+        }
+        if (getIntent().hasExtra(Intent.EXTRA_TEXT)) {
+            intent.putExtra(Intent.EXTRA_TEXT, getIntent().getStringExtra(Intent.EXTRA_TEXT));
+        }
+        
         startService(intent);
-        finish();
+        // Don't finish here - callback from Service will show Toast and finish
     }
 
     @Override
