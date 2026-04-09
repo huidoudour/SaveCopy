@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    tools:context=".SettingsActivity">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="8dp"
+        android:lineSpacingExtra="1sp"
+        android:paddingStart="?android:dialogPreferredPadding"
+        android:paddingEnd="?android:dialogPreferredPadding"
+        android:textColor="?android:textColorSecondary"
+        android:textSize="14sp"
+        tools:text="@string/introduction" />
+</LinearLayout>
