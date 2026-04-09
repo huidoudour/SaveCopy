@@ -3,6 +3,7 @@ package app.rikka.savecopy;
 import android.annotation.TargetApi;
 import android.app.IntentService;
 import android.app.PendingIntent;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -97,31 +98,77 @@ public class SaveService extends IntentService {
 
         String action = intent.getAction();
         String type = intent.getType();
+        Uri data = intent.getData();
+        ClipData clipData = intent.getClipData();
+        
+        Log.d(TAG, "onSave called - action: " + action + ", type: " + type + ", data: " + data);
+        Log.d(TAG, "has ClipData: " + (clipData != null));
+        if (clipData != null) {
+            Log.d(TAG, "ClipData item count: " + clipData.getItemCount());
+        }
+        Log.d(TAG, "has EXTRA_STREAM: " + intent.hasExtra(Intent.EXTRA_STREAM));
+        Log.d(TAG, "has EXTRA_TEXT: " + intent.hasExtra(Intent.EXTRA_TEXT));
 
         List<Uri> list = new ArrayList<>();
         if (Intent.ACTION_VIEW.equals(action)) {
-            Uri data = intent.getData();
-            if (data != null) list.add(data);
+            if (data != null) {
+                list.add(data);
+                Log.d(TAG, "Added data from ACTION_VIEW: " + data);
+            }
+        } else if (clipData != null && clipData.getItemCount() > 0) {
+            // Extract Uris from ClipData
+            for (int i = 0; i < clipData.getItemCount(); i++) {
+                Uri uri = clipData.getItemAt(i).getUri();
+                if (uri != null) {
+                    list.add(uri);
+                    Log.d(TAG, "Added Uri from ClipData[" + i + "]: " + uri);
+                }
+            }
         } else if (Intent.ACTION_SEND.equals(action)) {
-            // First try ArrayList (most common in Android 12+)
-            ArrayList<Uri> uriList = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
-            if (uriList != null && !uriList.isEmpty()) {
-                list.addAll(uriList);
-            } else {
-                // Fallback to single Uri
+            // First try single Uri (most common case)
+            try {
                 Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-                if (uri != null) list.add(uri);
+                if (uri != null) {
+                    list.add(uri);
+                    Log.d(TAG, "Added single Uri from EXTRA_STREAM: " + uri);
+                } else {
+                    Log.w(TAG, "getParcelableExtra returned null for EXTRA_STREAM");
+                }
+            } catch (ClassCastException e) {
+                Log.w(TAG, "ClassCastException on getParcelableExtra, trying ArrayList", e);
+                // Fallback to ArrayList
+                ArrayList<Uri> uriList = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                if (uriList != null && !uriList.isEmpty()) {
+                    list.addAll(uriList);
+                    Log.d(TAG, "Added " + uriList.size() + " Uris from ArrayList");
+                } else {
+                    Log.w(TAG, "getParcelableArrayListExtra returned null or empty");
+                }
             }
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
-            ArrayList<Uri> extras = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
-            if (extras != null) {
-                list.addAll(extras);
+            // For SEND_MULTIPLE, try ArrayList first
+            try {
+                ArrayList<Uri> extras = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                if (extras != null) {
+                    list.addAll(extras);
+                    Log.d(TAG, "Added " + extras.size() + " Uris from SEND_MULTIPLE");
+                } else {
+                    Log.w(TAG, "SEND_MULTIPLE: getParcelableArrayListExtra returned null");
+                }
+            } catch (ClassCastException e) {
+                Log.w(TAG, "SEND_MULTIPLE: ClassCastException, trying single Uri", e);
+                // Fallback to single Uri
+                Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (uri != null) {
+                    list.add(uri);
+                    Log.d(TAG, "SEND_MULTIPLE: Added single Uri as fallback: " + uri);
+                }
             }
         }
 
         // Handle empty list case - notify via callback
         if (list.isEmpty()) {
-            Log.d(TAG, "List is empty, notifying error");
+            Log.e(TAG, "List is empty! Action: " + action + ", Data: " + data + ", has ClipData: " + (clipData != null) + ", has EXTRA_STREAM: " + intent.hasExtra(Intent.EXTRA_STREAM));
             notifyCallback(null, getString(R.string.notification_error_text));
             stopSelf();
             return;
@@ -129,11 +176,11 @@ public class SaveService extends IntentService {
 
         Log.d(TAG, "List size: " + list.size() + ", processing " + list);
 
-        for (Uri data: list) {
+        for (Uri uri: list) {
             try {
-                doSave(data, type, id, callingPackage);
+                doSave(uri, type, id, callingPackage);
             } catch (Throwable e) {
-                Log.e(TAG, "save " + data, e);
+                Log.e(TAG, "save " + uri, e);
 
                 Throwable cause = e.getCause() == null ? e : e.getCause();
                 String errorMessage = getString(R.string.notification_error_text) + "\n\n" + cause.getMessage();

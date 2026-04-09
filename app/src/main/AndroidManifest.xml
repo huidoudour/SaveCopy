@@ -10,6 +10,8 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29"
         tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.INTERNET" />
 
     <queries>
         <!-- Used to check if SaveCopy is the only one to open the file -->
@@ -50,11 +52,11 @@
             </intent-filter>
         </activity>
         <activity
-            android:name=".SaveActivity"
+            android:name=".ChoiceActivity"
             android:excludeFromRecents="true"
             android:exported="true"
             android:noHistory="true"
-            android:theme="@style/AppTheme.NoDisplay">
+            android:theme="@style/AppTheme.Dialog.Alert">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -104,8 +106,21 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".SaveActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.NoDisplay" />
+        <activity
+            android:name=".DownloadActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.NoDisplay" />
 
         <service android:name=".SaveService" />
+        <service android:name=".DownloadService" />
     </application>
 
 </manifest>

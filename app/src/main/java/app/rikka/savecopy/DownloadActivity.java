@@ -47,13 +47,24 @@ public class DownloadActivity extends Activity {
         } else {
             // ACTION_VIEW with data
             String scheme = data.getScheme();
-            if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            if ("http".equals(scheme) || "https".equals(scheme)) {
+                // Direct HTTP/HTTPS link
+                downloadUrl = data.toString();
+                extractFileName(downloadUrl);
+            } else if ("content".equals(scheme) || "file".equals(scheme)) {
+                // File URI - try to extract URL from file content
+                downloadUrl = extractUrlFromFile(data);
+                if (downloadUrl == null) {
+                    Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
+                    finish();
+                    return;
+                }
+                extractFileName(downloadUrl);
+            } else {
                 Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
                 finish();
                 return;
             }
-            downloadUrl = data.toString();
-            extractFileName(downloadUrl);
         }
 
         // Register callback for download completion
@@ -91,6 +102,50 @@ public class DownloadActivity extends Activity {
         // Default filename based on URL
         String host = Uri.parse(url).getHost();
         suggestedFileName = host != null ? host + "-download" : "download";
+    }
+
+    private String extractUrlFromFile(Uri fileUri) {
+        try {
+            java.io.InputStream inputStream = getContentResolver().openInputStream(fileUri);
+            if (inputStream == null) {
+                return null;
+            }
+
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(inputStream, java.nio.charset.StandardCharsets.UTF_8)
+            );
+
+            StringBuilder content = new StringBuilder();
+            char[] buffer = new char[4096];
+            int bytesRead;
+            while ((bytesRead = reader.read(buffer)) != -1) {
+                content.append(buffer, 0, bytesRead);
+                // Limit reading to first 64KB to avoid performance issues
+                if (content.length() > 65536) {
+                    break;
+                }
+            }
+            reader.close();
+            inputStream.close();
+
+            // Try to find URL in the content using regex
+            String text = content.toString();
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "https?://[^\\s<>\"'{}|\\\\^`\\[\\]]+",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher matcher = pattern.matcher(text);
+            
+            if (matcher.find()) {
+                String url = matcher.group();
+                // Clean up trailing punctuation that might not be part of URL
+                url = url.replaceAll("[.,;!?]+$", "");
+                return url;
+            }
+        } catch (Exception e) {
+            android.util.Log.e("DownloadActivity", "Failed to extract URL from file", e);
+        }
+        return null;
     }
 
     private void createNotificationChannel() {

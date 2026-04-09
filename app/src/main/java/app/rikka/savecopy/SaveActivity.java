@@ -3,6 +3,7 @@ package app.rikka.savecopy;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -81,29 +82,50 @@ public class SaveActivity extends Activity {
         // Create intent explicitly to ensure data is preserved
         Intent intent = new Intent(this, SaveService.class);
         intent.setAction(getIntent().getAction());
-        intent.setDataAndType(getIntent().getData(), getIntent().getType());
-        intent.putExtra(SaveService.CALLING_PACKAGE, callingPackage);
         
-        // Copy EXTRA_STREAM if present - handle both single Uri and ArrayList
-        if (getIntent().hasExtra(Intent.EXTRA_STREAM)) {
+        // Copy ClipData or EXTRA_STREAM if present
+        ClipData clipData = getIntent().getClipData();
+        if (clipData != null) {
+            // Copy ClipData directly
+            intent.setClipData(clipData);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            android.util.Log.d("SaveActivity", "Copied ClipData with " + clipData.getItemCount() + " items");
+        } else if (getIntent().hasExtra(Intent.EXTRA_STREAM)) {
             ArrayList<Uri> streamUris = new ArrayList<>();
             // Try to get single Uri first (most common case for ACTION_SEND)
-            Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
-            if (singleUri != null) {
-                streamUris.add(singleUri);
-            } else {
-                // If null, try ArrayList (for ACTION_SEND_MULTIPLE or some systems)
+            try {
+                Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
+                if (singleUri != null) {
+                    streamUris.add(singleUri);
+                }
+            } catch (ClassCastException e) {
+                // If single Uri fails, try ArrayList (for ACTION_SEND_MULTIPLE or some systems)
                 try {
                     ArrayList<Uri> arrayList = getIntent().getParcelableArrayListExtra(Intent.EXTRA_STREAM);
                     if (arrayList != null) {
                         streamUris.addAll(arrayList);
                     }
-                } catch (ClassCastException e) {
+                } catch (ClassCastException e2) {
                     // Ignore, streamUris will be empty
                 }
             }
-            intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, streamUris);
+            if (!streamUris.isEmpty()) {
+                // For single URI, use putExtra to avoid migrateExtraStreamToClipData issues
+                if (streamUris.size() == 1) {
+                    intent.putExtra(Intent.EXTRA_STREAM, streamUris.get(0));
+                } else {
+                    intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, streamUris);
+                }
+            }
         }
+        
+        // Set type from original intent
+        String type = getIntent().getType();
+        if (type != null) {
+            intent.setType(type);
+        }
+        
+        intent.putExtra(SaveService.CALLING_PACKAGE, callingPackage);
         if (getIntent().hasExtra(Intent.EXTRA_TEXT)) {
             intent.putExtra(Intent.EXTRA_TEXT, getIntent().getStringExtra(Intent.EXTRA_TEXT));
         }
