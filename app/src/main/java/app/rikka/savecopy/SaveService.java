@@ -196,6 +196,12 @@ public class SaveService extends IntentService {
             throw new SaveException("data is null");
         }
 
+        // Check if it's an HTTP/HTTPS URL - these cannot be saved directly
+        String scheme = data.getScheme();
+        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+            throw new SaveException(getString(R.string.error_http_url_not_supported));
+        }
+
         ContentResolver cr = context.getContentResolver();
 
         String displayName = "unknown-" + System.currentTimeMillis();
@@ -247,7 +253,13 @@ public class SaveService extends IntentService {
             }
         }
 
-        InputStream is = cr.openInputStream(data);
+        InputStream is;
+        try {
+            is = cr.openInputStream(data);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to open input stream for: " + data, e);
+            throw new SaveException(getString(R.string.error_cannot_open_file) + ": " + e.getMessage());
+        }
         if (is == null) {
             throw new SaveException("can't open data");
         }

@@ -28,12 +28,80 @@ public class SaveActivity extends Activity {
         // Register callback for save completion (more reliable than broadcast on MIUI)
         SaveService.setCallback((fileName, error) -> runOnUiThread(() -> {
             if (error != null) {
-                Toast.makeText(SaveActivity.this, error, Toast.LENGTH_LONG).show();
+                // Show error and go back to choice activity
+                AlertDialog errorDialog = new AlertDialog.Builder(SaveActivity.this, R.style.AppTheme_Dialog_Alert)
+                        .setTitle(R.string.notification_error_title)
+                        .setMessage(error)
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .setPositiveButton(R.string.choose_action_title, null)
+                        .create();
+                
+                errorDialog.setOnShowListener(dialog -> {
+                    // Set click listeners after dialog is shown to avoid issues
+                    errorDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+                        errorDialog.dismiss();
+                        finish();
+                    });
+                    
+                    errorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                        // Go back to ChoiceActivity to let user choose again
+                        Intent intent = new Intent(SaveActivity.this, ChoiceActivity.class);
+                        intent.setAction(getIntent().getAction());
+                        
+                        // Copy all possible data sources
+                        ClipData clipData = getIntent().getClipData();
+                        if (clipData != null) {
+                            intent.setClipData(clipData);
+                            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            android.util.Log.d("SaveActivity", "Copied ClipData to ChoiceActivity with " + clipData.getItemCount() + " items");
+                        } else if (getIntent().hasExtra(Intent.EXTRA_STREAM)) {
+                            // Try to copy EXTRA_STREAM - can be single URI or ArrayList
+                            try {
+                                Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
+                                if (singleUri != null) {
+                                    intent.putExtra(Intent.EXTRA_STREAM, singleUri);
+                                    android.util.Log.d("SaveActivity", "Copied single EXTRA_STREAM to ChoiceActivity: " + singleUri);
+                                }
+                            } catch (ClassCastException e) {
+                                try {
+                                    ArrayList<Uri> arrayList = getIntent().getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                                    if (arrayList != null) {
+                                        intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayList);
+                                        android.util.Log.d("SaveActivity", "Copied ArrayList EXTRA_STREAM to ChoiceActivity with " + arrayList.size() + " items");
+                                    }
+                                } catch (ClassCastException e2) {
+                                    android.util.Log.e("SaveActivity", "Failed to copy EXTRA_STREAM", e2);
+                                }
+                            }
+                        }
+                        
+                        // Copy type and text extras
+                        String type = getIntent().getType();
+                        if (type != null) {
+                            intent.setType(type);
+                        }
+                        if (getIntent().hasExtra(Intent.EXTRA_TEXT)) {
+                            intent.putExtra(Intent.EXTRA_TEXT, getIntent().getStringExtra(Intent.EXTRA_TEXT));
+                        }
+                        
+                        errorDialog.dismiss();
+                        startActivity(intent);
+                        finish();
+                    });
+                });
+                
+                errorDialog.setOnDismissListener(dialog -> {
+                    if (!isFinishing()) {
+                        finish();
+                    }
+                });
+                
+                errorDialog.show();
             } else if (fileName != null) {
                 String message = getString(R.string.toast_saved, fileName);
                 Toast.makeText(SaveActivity.this, message, Toast.LENGTH_LONG).show();
+                finish();
             }
-            finish();
         }));
 
         String action = getIntent().getAction();
@@ -45,7 +113,8 @@ public class SaveActivity extends Activity {
         }
 
         getPackageManager().clearPackagePreferredActivities(getPackageName());
-        checkConfirmation();
+        // Skip confirmation dialog, go directly to permission check
+        checkPermission();
     }
 
     private void checkConfirmation() {

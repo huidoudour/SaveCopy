@@ -70,15 +70,31 @@ public class ChoiceActivity extends Activity {
         android.util.Log.d("ChoiceActivity", "Original data: " + getIntent().getData());
         android.util.Log.d("ChoiceActivity", "Original type: " + getIntent().getType());
         android.util.Log.d("ChoiceActivity", "has EXTRA_STREAM: " + getIntent().hasExtra(Intent.EXTRA_STREAM));
+        android.util.Log.d("ChoiceActivity", "has ClipData: " + (getIntent().getClipData() != null));
 
-        if (getIntent().hasExtra(Intent.EXTRA_STREAM)) {
-            ArrayList<Uri> streamUris = new ArrayList<>();
+        // Try to get URIs from multiple sources
+        ArrayList<Uri> streamUris = new ArrayList<>();
+        
+        // First, try ClipData (most reliable)
+        ClipData clipData = getIntent().getClipData();
+        if (clipData != null && clipData.getItemCount() > 0) {
+            for (int i = 0; i < clipData.getItemCount(); i++) {
+                Uri uri = clipData.getItemAt(i).getUri();
+                if (uri != null) {
+                    streamUris.add(uri);
+                    android.util.Log.d("ChoiceActivity", "Got Uri from ClipData[" + i + "]: " + uri);
+                }
+            }
+        }
+        
+        // If no URIs from ClipData, try EXTRA_STREAM
+        if (streamUris.isEmpty() && getIntent().hasExtra(Intent.EXTRA_STREAM)) {
             // Try to get single Uri first (most common case for ACTION_SEND)
             try {
                 Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
                 if (singleUri != null) {
                     streamUris.add(singleUri);
-                    android.util.Log.d("ChoiceActivity", "Got single Uri: " + singleUri);
+                    android.util.Log.d("ChoiceActivity", "Got single Uri from EXTRA_STREAM: " + singleUri);
                 } else {
                     android.util.Log.w("ChoiceActivity", "getParcelableExtra returned null");
                 }
@@ -98,36 +114,36 @@ public class ChoiceActivity extends Activity {
                     // Ignore, streamUris will be empty
                 }
             }
+        }
+        
+        // Set the URIs to the intent
+        if (!streamUris.isEmpty()) {
+            // Use ClipData to avoid migrateExtraStreamToClipData clearing EXTRA_STREAM
+            String type = getIntent().getType();
+            if (type == null) type = "*/*";
             
-            if (!streamUris.isEmpty()) {
-                // Use ClipData to avoid migrateExtraStreamToClipData clearing EXTRA_STREAM
-                String type = getIntent().getType();
-                if (type == null) type = "*/*";
-                
-                if (streamUris.size() == 1) {
-                    // Single URI: use setDataAndType + ClipData
-                    intent.setDataAndType(streamUris.get(0), type);
-                    ClipData clipData = ClipData.newRawUri(null, streamUris.get(0));
-                    intent.setClipData(clipData);
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    android.util.Log.d("ChoiceActivity", "Set ClipData for single Uri");
-                } else {
-                    // Multiple URIs: use ClipData
-                    ClipData.Item firstItem = new ClipData.Item(streamUris.get(0));
-                    ClipData clipData = new ClipData(null, new String[]{type}, firstItem);
-                    for (int i = 1; i < streamUris.size(); i++) {
-                        clipData.addItem(new ClipData.Item(streamUris.get(i)));
-                    }
-                    intent.setClipData(clipData);
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    android.util.Log.d("ChoiceActivity", "Set ClipData for " + streamUris.size() + " Uris");
-                }
+            if (streamUris.size() == 1) {
+                // Single URI: use setDataAndType + ClipData
+                intent.setDataAndType(streamUris.get(0), type);
+                ClipData newClipData = ClipData.newRawUri(null, streamUris.get(0));
+                intent.setClipData(newClipData);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                android.util.Log.d("ChoiceActivity", "Set ClipData for single Uri");
             } else {
-                android.util.Log.e("ChoiceActivity", "streamUris is empty after processing!");
+                // Multiple URIs: use ClipData
+                ClipData.Item firstItem = new ClipData.Item(streamUris.get(0));
+                ClipData newClipData = new ClipData(null, new String[]{type}, firstItem);
+                for (int i = 1; i < streamUris.size(); i++) {
+                    newClipData.addItem(new ClipData.Item(streamUris.get(i)));
+                }
+                intent.setClipData(newClipData);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                android.util.Log.d("ChoiceActivity", "Set ClipData for " + streamUris.size() + " Uris");
             }
         } else {
-            // No EXTRA_STREAM, just copy data and type
+            // No URIs found, just copy data and type
             intent.setDataAndType(getIntent().getData(), getIntent().getType());
+            android.util.Log.w("ChoiceActivity", "No URIs found, using original data: " + getIntent().getData());
         }
         
         if (getIntent().hasExtra(Intent.EXTRA_TEXT)) {

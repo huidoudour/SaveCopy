@@ -17,7 +17,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
@@ -75,6 +77,12 @@ public class DownloadService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+
+        // Show start download toast on main thread
+        new Handler(Looper.getMainLooper()).post(() -> {
+            String message = getString(R.string.toast_start_download, truncateUrl(downloadUrl));
+            android.widget.Toast.makeText(DownloadService.this, message, android.widget.Toast.LENGTH_LONG).show();
+        });
 
         // Start foreground with notification
         startForeground(NOTIFICATION_ID, createProgressNotification(downloadUrl));
@@ -211,6 +219,12 @@ public class DownloadService extends Service {
                 Notification notification = createSuccessNotification(savedFileName, null);
                 notificationManager.notify(NOTIFICATION_ID + 1, notification);
             }
+
+            // Show success toast on main thread
+            new Handler(Looper.getMainLooper()).post(() -> {
+                String message = getString(R.string.toast_saved, savedFileName);
+                android.widget.Toast.makeText(DownloadService.this, message, android.widget.Toast.LENGTH_LONG).show();
+            });
 
             notifyCallback(savedFileName, null);
 

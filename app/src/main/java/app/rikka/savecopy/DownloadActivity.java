@@ -29,28 +29,16 @@ public class DownloadActivity extends Activity {
         // Check for VIEW action with HTTP/HTTPS URL
         String action = getIntent().getAction();
         Uri data = getIntent().getData();
+        android.util.Log.d("DownloadActivity", "onCreate - action: " + action + ", data: " + data);
 
-        if (!Intent.ACTION_VIEW.equals(action) || data == null) {
-            // Also accept SEND action for text sharing (URLs)
-            if (Intent.ACTION_SEND.equals(action)) {
-                String text = getIntent().getStringExtra(Intent.EXTRA_TEXT);
-                if (text != null && (text.startsWith("http://") || text.startsWith("https://"))) {
-                    downloadUrl = text.trim();
-                    extractFileName(downloadUrl);
-                }
-            }
-            if (downloadUrl == null) {
-                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                finish();
-                return;
-            }
-        } else {
+        if (Intent.ACTION_VIEW.equals(action) && data != null) {
             // ACTION_VIEW with data
             String scheme = data.getScheme();
             if ("http".equals(scheme) || "https".equals(scheme)) {
                 // Direct HTTP/HTTPS link
                 downloadUrl = data.toString();
                 extractFileName(downloadUrl);
+                android.util.Log.d("DownloadActivity", "Got HTTP URL from data: " + downloadUrl);
             } else if ("content".equals(scheme) || "file".equals(scheme)) {
                 // File URI - try to extract URL from file content
                 downloadUrl = extractUrlFromFile(data);
@@ -60,23 +48,93 @@ public class DownloadActivity extends Activity {
                     return;
                 }
                 extractFileName(downloadUrl);
+                android.util.Log.d("DownloadActivity", "Extracted URL from file: " + downloadUrl);
             } else {
                 Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
                 finish();
                 return;
             }
+        } else if (Intent.ACTION_SEND.equals(action)) {
+            // Handle SEND action - check EXTRA_TEXT first, then ClipData, then EXTRA_STREAM
+            String text = getIntent().getStringExtra(Intent.EXTRA_TEXT);
+            if (text != null && (text.startsWith("http://") || text.startsWith("https://"))) {
+                downloadUrl = text.trim();
+                extractFileName(downloadUrl);
+                android.util.Log.d("DownloadActivity", "Got HTTP URL from EXTRA_TEXT: " + downloadUrl);
+            } else {
+                // Try to get URL from ClipData
+                android.content.ClipData clipData = getIntent().getClipData();
+                if (clipData != null && clipData.getItemCount() > 0) {
+                    Uri uri = clipData.getItemAt(0).getUri();
+                    if (uri != null) {
+                        String scheme = uri.getScheme();
+                        android.util.Log.d("DownloadActivity", "ClipData URI scheme: " + scheme + ", uri: " + uri);
+                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                            // Direct HTTP/HTTPS URL in ClipData
+                            downloadUrl = uri.toString();
+                            extractFileName(downloadUrl);
+                            android.util.Log.d("DownloadActivity", "Got HTTP URL from ClipData: " + downloadUrl);
+                        } else if ("content".equals(scheme) || "file".equals(scheme)) {
+                            // File URI - try to extract URL from file content
+                            downloadUrl = extractUrlFromFile(uri);
+                            if (downloadUrl == null) {
+                                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
+                                finish();
+                                return;
+                            }
+                            extractFileName(downloadUrl);
+                            android.util.Log.d("DownloadActivity", "Extracted URL from ClipData file: " + downloadUrl);
+                        }
+                    }
+                }
+            }
+            
+            // If still no URL from EXTRA_TEXT or ClipData, try EXTRA_STREAM
+            if (downloadUrl == null && getIntent().hasExtra(Intent.EXTRA_STREAM)) {
+                try {
+                    Uri streamUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
+                    if (streamUri != null) {
+                        String scheme = streamUri.getScheme();
+                        android.util.Log.d("DownloadActivity", "EXTRA_STREAM URI scheme: " + scheme + ", uri: " + streamUri);
+                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                            // Direct HTTP/HTTPS URL in EXTRA_STREAM
+                            downloadUrl = streamUri.toString();
+                            extractFileName(downloadUrl);
+                            android.util.Log.d("DownloadActivity", "Got HTTP URL from EXTRA_STREAM: " + downloadUrl);
+                        } else if ("content".equals(scheme) || "file".equals(scheme)) {
+                            // File URI - try to extract URL from file content
+                            downloadUrl = extractUrlFromFile(streamUri);
+                            if (downloadUrl == null) {
+                                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
+                                finish();
+                                return;
+                            }
+                            extractFileName(downloadUrl);
+                            android.util.Log.d("DownloadActivity", "Extracted URL from EXTRA_STREAM file: " + downloadUrl);
+                        }
+                    }
+                } catch (ClassCastException e) {
+                    android.util.Log.e("DownloadActivity", "Failed to get EXTRA_STREAM", e);
+                }
+            }
+            
+            // If still no URL, show error
+            if (downloadUrl == null) {
+                android.util.Log.e("DownloadActivity", "No valid URL found!");
+                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
+                finish();
+                return;
+            }
+        } else {
+            // Unsupported action
+            android.util.Log.e("DownloadActivity", "Unsupported action: " + action);
+            Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
+            finish();
+            return;
         }
 
-        // Register callback for download completion
-        DownloadService.setCallback((fileName, error) -> runOnUiThread(() -> {
-            if (error != null) {
-                Toast.makeText(DownloadActivity.this, error, Toast.LENGTH_LONG).show();
-            } else if (fileName != null) {
-                String message = getString(R.string.toast_saved, fileName);
-                Toast.makeText(DownloadActivity.this, message, Toast.LENGTH_LONG).show();
-            }
-            finish();
-        }));
+        // No callback needed - DownloadService will show notifications directly
+        // This allows DownloadActivity to finish immediately and run in background
 
         createNotificationChannel();
         checkPermission();
@@ -191,7 +249,10 @@ public class DownloadActivity extends Activity {
         } else {
             startService(intent);
         }
-        // Don't finish here - callback from Service will show Toast and finish
+        
+        // Finish immediately - service runs in background with notifications
+        android.util.Log.d("DownloadActivity", "Started download service, finishing activity");
+        finish();
     }
 
     @Override
