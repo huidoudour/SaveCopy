@@ -99,8 +99,8 @@ public class SaveActivity extends Activity {
                 
                 errorDialog.show();
             } else if (fileName != null) {
-                String message = getString(R.string.toast_saved, fileName);
-                Toast.makeText(SaveActivity.this, message, Toast.LENGTH_LONG).show();
+                // fileName is already formatted by SaveService (either toast_saved or toast_saved_custom)
+                Toast.makeText(SaveActivity.this, fileName, Toast.LENGTH_LONG).show();
                 finish();
             }
         }));

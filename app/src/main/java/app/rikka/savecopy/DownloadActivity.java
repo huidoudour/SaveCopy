@@ -136,6 +136,17 @@ public class DownloadActivity extends Activity {
         // No callback needed - DownloadService will show notifications directly
         // This allows DownloadActivity to finish immediately and run in background
 
+        requestNotificationPermission();
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
+                return;
+            }
+        }
         createNotificationChannel();
         checkPermission();
     }
@@ -213,7 +224,7 @@ public class DownloadActivity extends Activity {
                 NotificationChannel channel = new NotificationChannel(
                         CHANNEL_ID,
                         getString(R.string.notification_channel_progress),
-                        NotificationManager.IMPORTANCE_LOW
+                        NotificationManager.IMPORTANCE_DEFAULT
                 );
                 channel.setDescription(getString(R.string.notification_channel_result));
                 manager.createNotificationChannel(channel);
@@ -257,6 +268,11 @@ public class DownloadActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == 100) {
+            createNotificationChannel();
+            checkPermission();
+            return;
+        }
         if (requestCode == PERMISSION_REQUEST_CODE) {
             if (grantResults.length == 0) {
                 return;

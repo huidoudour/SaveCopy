@@ -1,5 +1,21 @@
 # SaveCopy
 
+### 个人修改版
+ - 添加支持选择的对话框
+ - 添加多个功能，自定义保存文件夹
+ - 标准保存副本按钮
+ - 新增下载副本按钮<br>
+
+```text
+此修改仅供学习参考，不得用于其它用途
+此仓库为AI修改版
+```
+
+> 如若侵权，请联系我<br>
+
+[![AI Assisted](https://img.shields.io/badge/AI-Assisted-blue.svg)](https://github.com/RikkaApps/SaveCopy)
+
+
 ## Background
 
 One of the biggest changes of Android 11 is that all apps targeting 30 can only access its' private folder. Google Play will force new/updated apps to upgrade their target API one year later, so apps must make changes.

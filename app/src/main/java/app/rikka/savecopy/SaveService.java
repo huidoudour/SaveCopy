@@ -287,15 +287,39 @@ public class SaveService extends IntentService {
             Uri treeUri = Uri.parse(customFolderPath);
             Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri));
 
-            // Create file in the custom folder
+            // Guess mime type from file extension
+            String mimeType = FileUtils.getMimeTypeForFileName(displayName);
+            Log.d(TAG, "SAF createDocument: mimeType=" + mimeType + ", displayName=" + displayName);
+
+            // Create file in the custom folder with deduplication
+            fileUri = null;
             try {
-                fileUri = DocumentsContract.createDocument(cr, docUri, "application/octet-stream", displayName);
-                if (fileUri == null) {
-                    throw new SaveException("Failed to create file in custom folder");
-                }
+                fileUri = DocumentsContract.createDocument(cr, docUri, mimeType, displayName);
             } catch (Exception e) {
-                Log.e(TAG, "Failed to create file in custom folder", e);
-                throw new SaveException("Failed to create file in custom folder: " + e.getMessage());
+                Log.d(TAG, "SAF createDocument failed, trying deduplication", e);
+            }
+
+            // If file exists, try with (1), (2), ... suffixes
+            if (fileUri == null) {
+                String[] parts = FileUtils.spiltFileName(displayName);
+                String baseName = parts[0];
+                String ext = parts[1];
+                for (int i = 1; i <= 999 && fileUri == null; i++) {
+                    String dedupName = baseName + " (" + i + ")" + ext;
+                    try {
+                        fileUri = DocumentsContract.createDocument(cr, docUri, mimeType, dedupName);
+                        if (fileUri != null) {
+                            displayName = dedupName;
+                            Log.d(TAG, "SAF deduplication succeeded: " + dedupName);
+                        }
+                    } catch (Exception e) {
+                        Log.d(TAG, "SAF deduplication attempt " + i + " failed", e);
+                    }
+                }
+            }
+
+            if (fileUri == null) {
+                throw new SaveException("Failed to create file in custom folder");
             }
         } else {
             // Use default MediaStore approach
@@ -333,8 +357,10 @@ public class SaveService extends IntentService {
         // No progress notification, only Toast at the end
         OutputStream os;
         if (customFolderPath != null) {
-            // For SAF, use openOutputStream
-            os = cr.openOutputStream(fileUri, "w");
+            // For SAF, use ParcelFileDescriptor to avoid pipe buffer limit
+            ParcelFileDescriptor pfd = cr.openFileDescriptor(fileUri, "w");
+            if (pfd == null) throw new SaveException("can't open output");
+            os = new java.io.FileOutputStream(pfd.getFileDescriptor());
         } else {
             os = cr.openOutputStream(fileUri, "w");
         }
@@ -396,7 +422,11 @@ public class SaveService extends IntentService {
     private void notifyCallback(String fileName, String error) {
         SaveCallback callback = sCallback;
         if (callback != null) {
-            callback.onSaveComplete(fileName, error);
+            if (error != null) {
+                callback.onSaveComplete(null, error);
+            } else {
+                callback.onSaveComplete(getString(R.string.toast_saved, fileName), null);
+            }
         }
         // Also send broadcast as fallback
         Intent broadcastIntent = new Intent(ACTION_SAVE_COMPLETE);
@@ -414,9 +444,7 @@ public class SaveService extends IntentService {
             if (error != null) {
                 callback.onSaveComplete(null, error);
             } else {
-                // Create a custom message with folder name
-                String message = getString(R.string.toast_saved_custom, fileName, folderName);
-                callback.onSaveComplete(message, null);
+                callback.onSaveComplete(getString(R.string.toast_saved_custom, fileName, folderName), null);
             }
         }
         // Also send broadcast as fallback

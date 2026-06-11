@@ -35,6 +35,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
@@ -47,4 +52,11 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
+
+    // SAF
+    //noinspection UseTomlInstead
+    implementation("androidx.documentfile:documentfile:1.1.0")
+    // MTDataFilesProvider
+    //noinspection UseTomlInstead
+    implementation("com.github.L-JINBIN:MTDataFilesProvider:v1.0.0")
 }
