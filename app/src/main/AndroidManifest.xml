@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:ignore="ForegroundServicesPolicy" />
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"
+        tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.INTERNET" />
+
+    <queries>
+        <!-- Used to check if SaveCopy is the only one to open the file -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+    </queries>
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/save_a_copy"
+        android:requestLegacyExternalStorage="@bool/config_requestLegacyExternalStorage"
+        android:supportsRtl="true"
+        tools:ignore="AllowBackup" >
+        <activity
+            android:name=".InfoActivity"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.Dialog.Alert"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.INFO" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".SettingsActivity"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.DialogAlert.AppCompat"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ChoiceActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.Dialog.Alert">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <data
+                    android:mimeType="application/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="audio/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="font/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="image/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="model/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="text/*"
+                    android:scheme="content" />
+                <data
+                    android:mimeType="video/*"
+                    android:scheme="content" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+
+                <data
+                    android:mimeType="application/*" />
+                <data
+                    android:mimeType="audio/*" />
+                <data
+                    android:mimeType="font/*" />
+                <data
+                    android:mimeType="image/*" />
+                <data
+                    android:mimeType="model/*"/>
+                <data
+                    android:mimeType="text/*" />
+                <data
+                    android:mimeType="video/*" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".SaveActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.NoDisplay" />
+        <activity
+            android:name=".DownloadActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.NoDisplay" />
+
+        <service android:name=".SaveService" />
+        <service android:name=".DownloadService"
+            android:foregroundServiceType="dataSync" />
+    </application>
+
+</manifest>

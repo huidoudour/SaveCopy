@@ -1,0 +1,38 @@
+<resources>
+    <string name="app_name">CopySave</string>
+    <string name="save_a_copy">Save a copy</string>
+    <string name="save_file_copy">Save copy</string>
+    <string name="download_file_copy">Download copy</string>
+    <string name="notification_channel_progress">Progress</string>
+    <string name="notification_channel_result">Result</string>
+    <string name="notification_working_title">Working…</string>
+    <string name="notification_saving_title">Saving copy of %s</string>
+    <string name="notification_saved_title">Saved copy for %1$s</string>
+    <string name="notification_saved_text">The copy is located at %1$s</string>
+    <string name="toast_saved">Saved: %s to Download</string>
+    <string name="toast_invalid_uri">Invalid download link</string>
+    <string name="toast_start_download">Start downloading: %s</string>
+    <string name="notification_error_title">Something went wrong</string>
+    <string name="notification_error_text">In most cases, the problem is not cause by this app.</string>
+    <string name="dialog_no_permission_title">Requires storage permission</string>
+    <string name="dialog_no_permission_message">To saving copies, storage permission is necessary.\nPlease grant permission and try again.</string>
+    <string name="dialog_no_permission_button_app_info">App info</string>
+    <string name="notification_action_open">Open file</string>
+    <string name="open_with">Open with</string>
+    <string name="settings">Settings</string>
+    <string name="settings_prefer_app_folder">Prefer app folder</string>
+    <string name="settings_prefer_app_folder_summary">Save the copy to Download/&lt;app name&gt;.</string>
+    <string name="introduction">This app adds the "%1$s" action to "Open with" and "Share" menus. When you open or share a file with "%1$s", a copy of the file will be saved to the "Download" folder.\n\nIn order to keep your home screen clean, this app does not show in the home app (some systems may force the app to show). To uninstall, please go to system settings.</string>
+    <string name="dialog_confirmation_message">Save a copy for this file?</string>
+    <string name="choose_action_title">Choose Action</string>
+    <string name="error_http_url_not_supported">HTTP/HTTPS URLs cannot be saved directly. Please use the download function.</string>
+    <string name="error_cannot_open_file">Cannot open file</string>
+    <string name="settings_use_custom_folder">Use custom folder</string>
+    <string name="settings_use_custom_folder_summary">Save files to a custom folder instead of Download.</string>
+    <string name="settings_custom_folder_path">Custom folder path</string>
+    <string name="settings_custom_folder_path_summary">Tap to select folder</string>
+    <string name="settings_custom_folder_not_set">Not set</string>
+    <string name="dialog_select_folder_title">Select folder</string>
+    <string name="toast_folder_selected">Folder selected: %s</string>
+    <string name="toast_saved_custom" formatted="false">Saved: %s to %s</string>
+</resources>

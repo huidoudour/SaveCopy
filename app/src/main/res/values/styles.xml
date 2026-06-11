@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="AppTheme.NoDisplay" parent="Theme.NoDisplay" />
+
+    <style name="AppTheme.Dialog.Alert" parent="Theme.Light.Dialog.Alert" />
+
+    <style name="AppTheme.DialogAlert.AppCompat" parent="Theme.AppCompat.Light.Dialog.Alert" />
+
+</resources>
