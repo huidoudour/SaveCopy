@@ -27,6 +27,7 @@ public class SaveActivity extends Activity {
 
         // Register callback for save completion (more reliable than broadcast on MIUI)
         SaveService.setCallback((fileName, error) -> runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
             if (error != null) {
                 // Show error and go back to choice activity
                 AlertDialog errorDialog = new AlertDialog.Builder(SaveActivity.this, R.style.AppTheme_Dialog_Alert)
@@ -201,6 +202,12 @@ public class SaveActivity extends Activity {
         
         startService(intent);
         // Don't finish here - callback from Service will show Toast and finish
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        SaveService.setCallback(null);
     }
 
     @Override

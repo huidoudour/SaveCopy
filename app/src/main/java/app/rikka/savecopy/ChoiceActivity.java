@@ -25,18 +25,53 @@ public class ChoiceActivity extends Activity {
         TextView btnSaveCopy = dialogView.findViewById(R.id.btn_save_copy);
         TextView btnDownloadCopy = dialogView.findViewById(R.id.btn_download_copy);
         
-        // Check if it's an http/https link
+        // Check if any incoming URI is an http/https link
+        // Need to inspect ClipData and EXTRA_STREAM too, not just getData(),
+        // because Android's share sheet often passes URIs through ClipData
+        // while leaving getData() as null.
         Uri data = getIntent().getData();
-        boolean isHttpLink = data != null && ("http".equals(data.getScheme()) || "https".equals(data.getScheme()));
-        
+        boolean isHttpLink = isHttpUri(data);
+
+        if (!isHttpLink) {
+            // Check ClipData
+            ClipData clipData = getIntent().getClipData();
+            if (clipData != null) {
+                for (int i = 0; i < clipData.getItemCount(); i++) {
+                    if (isHttpUri(clipData.getItemAt(i).getUri())) {
+                        isHttpLink = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!isHttpLink && getIntent().hasExtra(Intent.EXTRA_STREAM)) {
+            // Check EXTRA_STREAM (single Uri or ArrayList)
+            try {
+                Uri singleUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
+                if (isHttpUri(singleUri)) {
+                    isHttpLink = true;
+                }
+            } catch (ClassCastException e) {
+                try {
+                    ArrayList<Uri> uriList = getIntent().getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                    if (uriList != null) {
+                        for (Uri uri : uriList) {
+                            if (isHttpUri(uri)) {
+                                isHttpLink = true;
+                                break;
+                            }
+                        }
+                    }
+                } catch (ClassCastException ignored) {
+                }
+            }
+        }
+
         if (isHttpLink) {
             // For HTTP links, only allow download
             btnSaveCopy.setEnabled(false);
             btnSaveCopy.setAlpha(0.5f);
-        } else if (data != null && ("content".equals(data.getScheme()) || "file".equals(data.getScheme()))) {
-            // For file URIs, both options are available
-            // Save copy will save the file itself
-            // Download copy will try to extract URL from file content
         }
 
         btnSaveCopy.setOnClickListener(v -> {
@@ -153,6 +188,12 @@ public class ChoiceActivity extends Activity {
 
         startActivity(intent);
         finish();
+    }
+
+    private static boolean isHttpUri(Uri uri) {
+        if (uri == null) return false;
+        String scheme = uri.getScheme();
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 
     @Override
