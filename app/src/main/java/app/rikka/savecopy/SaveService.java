@@ -239,32 +239,6 @@ public class SaveService extends IntentService {
             download += (label != null ? File.separator + label : "");
         }
 
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-            // before Android 11 (actually before 11 DP2), MediaStore can't name the file correctly
-
-            String[] displayParts = FileUtils.spiltFileName(displayName);
-            List<String> existingNames = new ArrayList<>();
-            for (File file : Optional.ofNullable(new File(Environment.getExternalStorageDirectory(), download).listFiles()).orElse(new File[0])) {
-                String name = file.getName();
-                String[] parts = FileUtils.spiltFileName(name);
-                boolean add = false;
-                if (name.equals(displayName)) {
-                    add = true;
-                } else if (displayParts[1].equals(parts[1])) {
-                    add = parts[0].matches(String.format("%s \\(\\d+\\)", displayParts[0].replaceAll("([\\\\+*?\\[\\](){}|.^$])", "\\\\$1")));
-                }
-                if (add) {
-                    existingNames.add(name);
-                }
-            }
-            if (!existingNames.isEmpty()) {
-                int index = 1;
-                while (existingNames.contains(displayName)) {
-                    displayName = String.format(Locale.ENGLISH, "%s (%d)%s", displayParts[0], index++, displayParts[1]);
-                }
-            }
-        }
-
         InputStream is;
         try {
             is = cr.openInputStream(data);
@@ -323,6 +297,32 @@ public class SaveService extends IntentService {
             }
         } else {
             // Use default MediaStore approach
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                // before Android 11 (actually before 11 DP2), MediaStore can't name the file correctly
+
+                String[] displayParts = FileUtils.spiltFileName(displayName);
+                List<String> existingNames = new ArrayList<>();
+                for (File file : Optional.ofNullable(new File(Environment.getExternalStorageDirectory(), download).listFiles()).orElse(new File[0])) {
+                    String name = file.getName();
+                    String[] parts = FileUtils.spiltFileName(name);
+                    boolean add = false;
+                    if (name.equals(displayName)) {
+                        add = true;
+                    } else if (displayParts[1].equals(parts[1])) {
+                        add = parts[0].matches(String.format("%s \\(\\d+\\)", displayParts[0].replaceAll("([\\\\+*?\\[\\](){}|.^$])", "\\\\$1")));
+                    }
+                    if (add) {
+                        existingNames.add(name);
+                    }
+                }
+                if (!existingNames.isEmpty()) {
+                    int index = 1;
+                    while (existingNames.contains(displayName)) {
+                        displayName = String.format(Locale.ENGLISH, "%s (%d)%s", displayParts[0], index++, displayParts[1]);
+                    }
+                }
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH, download);
                 values.put(MediaStore.MediaColumns.IS_PENDING, true);

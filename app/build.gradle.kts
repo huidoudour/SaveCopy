@@ -25,12 +25,52 @@ android {
         viewBinding = true
     }
 
+    val useSignKey = rootProject.hasProperty("storeFile") &&
+        rootProject.hasProperty("storePassword") &&
+        rootProject.hasProperty("keyAlias") &&
+        rootProject.hasProperty("keyPassword")
+
+    signingConfigs {
+        if (useSignKey) {
+            create("sign_key") {
+                storeFile = file(rootProject.property("storeFile") as String)
+                storePassword = rootProject.property("storePassword") as String
+                keyAlias = rootProject.property("keyAlias") as String
+                keyPassword = rootProject.property("keyPassword") as String
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = false
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = if (useSignKey) {
+                signingConfigs.getByName("sign_key")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            optimization {
+                enable = false
+            }
+            signingConfig = if (useSignKey) {
+                signingConfigs.getByName("sign_key")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
