@@ -28,7 +28,6 @@ import android.provider.OpenableColumns;
 import android.util.Log;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,17 +46,26 @@ public class DownloadService extends Service {
     private static final int NOTIFICATION_ID = 1001;
     private static final int BUFFER_SIZE = 8192;
     private static final String CHANNEL_ID = "download_channel";
+    private static final int MAX_RETRIES = 3;
+    private static final long PROGRESS_INTERVAL_MS = 500;
+    private static final int CONNECT_TIMEOUT = 15000;
+    private static final int READ_TIMEOUT = 30000;
 
     public static final String EXTRA_DOWNLOAD_URL = "download_url";
     public static final String EXTRA_FILE_NAME = "file_name";
     public static final String EXTRA_CALLING_PACKAGE = "calling_package";
+    public static final String ACTION_CANCEL = "app.rikka.savecopy.DOWNLOAD_CANCEL";
 
     private static DownloadCallback sCallback;
 
     private NotificationManager notificationManager;
     private Notification.Builder progressBuilder;
+    private volatile boolean cancelled;
     private long totalSize;
     private long downloadedSize;
+    private long lastUpdateTime;
+    private long lastUpdateBytes;
+    private long downloadStartTime;
 
     public interface DownloadCallback {
         void onDownloadComplete(String fileName, String error);
@@ -79,6 +87,17 @@ public class DownloadService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+
+        // Handle cancel action from notification
+        if (ACTION_CANCEL.equals(intent.getAction())) {
+            Log.d(TAG, "Download cancelled by user");
+            cancelled = true;
+            stopForeground(true);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        cancelled = false;
 
         String downloadUrl = intent.getStringExtra(EXTRA_DOWNLOAD_URL);
         String fileName = intent.getStringExtra(EXTRA_FILE_NAME);
@@ -119,6 +138,14 @@ public class DownloadService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
+        // Cancel action
+        Intent cancelIntent = new Intent(this, DownloadService.class);
+        cancelIntent.setAction(ACTION_CANCEL);
+        PendingIntent cancelPendingIntent = PendingIntent.getService(
+                this, 1, cancelIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, CHANNEL_ID);
@@ -133,19 +160,48 @@ public class DownloadService extends Service {
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel,
+                        getString(android.R.string.cancel), cancelPendingIntent)
                 .setProgress(100, 0, true);
     }
 
     private void updateProgressNotification(long current, long total) {
         if (progressBuilder == null || notificationManager == null) return;
-        if (total <= 0) {
-            progressBuilder.setProgress(0, 0, true);
-        } else {
+
+        long now = System.currentTimeMillis();
+        // Throttle updates to avoid UI jank
+        if (now - lastUpdateTime < PROGRESS_INTERVAL_MS && current < total) return;
+
+        long elapsed = now - downloadStartTime;
+        if (elapsed <= 0) elapsed = 1;
+
+        // Calculate speed
+        long bytesSinceLast = current - lastUpdateBytes;
+        long timeSinceLast = now - lastUpdateTime;
+        if (timeSinceLast <= 0) timeSinceLast = 1;
+        double speedBps = (double) bytesSinceLast * 1000 / timeSinceLast;
+
+        lastUpdateTime = now;
+        lastUpdateBytes = current;
+
+        StringBuilder text = new StringBuilder();
+        text.append("↓ ").append(formatSpeed(speedBps));
+        text.append("  ").append(formatSize(current));
+        if (total > 0) {
+            text.append("/").append(formatSize(total));
             int percent = (int) ((current * 100) / total);
             progressBuilder.setProgress(100, percent, false);
+            // ETA
+            long remaining = total - current;
+            if (speedBps > 0 && remaining > 0) {
+                long etaSec = (long) (remaining / speedBps);
+                text.append("  ").append(formatEta(etaSec));
+            }
+        } else {
+            progressBuilder.setProgress(0, 0, true);
         }
-        progressBuilder.setContentText(getString(R.string.notification_saving_title,
-                formatSize(current) + " / " + (total > 0 ? formatSize(total) : "?")));
+
+        progressBuilder.setContentText(text.toString());
         notificationManager.notify(NOTIFICATION_ID, progressBuilder.build());
     }
 
@@ -213,24 +269,68 @@ public class DownloadService extends Service {
         return String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
     }
 
+    private static String formatSpeed(double bytesPerSec) {
+        if (bytesPerSec < 1024) return String.format(Locale.US, "%.0f B/s", bytesPerSec);
+        if (bytesPerSec < 1024 * 1024) return String.format(Locale.US, "%.1f KB/s", bytesPerSec / 1024.0);
+        return String.format(Locale.US, "%.1f MB/s", bytesPerSec / (1024.0 * 1024.0));
+    }
+
+    private static String formatEta(long seconds) {
+        if (seconds < 0) return "";
+        if (seconds < 60) return seconds + "s";
+        if (seconds < 3600) return String.format(Locale.US, "%dm%ds", seconds / 60, seconds % 60);
+        return String.format(Locale.US, "%dh%dm", seconds / 3600, (seconds % 3600) / 60);
+    }
+
     private void doDownload(String downloadUrl, String suggestedFileName, String callingPackage) throws IOException {
         Log.d(TAG, "Starting download: " + downloadUrl);
 
+        IOException lastError = null;
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            if (cancelled) {
+                throw new IOException("Download cancelled");
+            }
+            try {
+                attemptDownload(downloadUrl, suggestedFileName, callingPackage);
+                return;
+            } catch (IOException e) {
+                lastError = e;
+                Log.w(TAG, "Attempt " + attempt + "/" + MAX_RETRIES + " failed: " + e.getMessage());
+                if (cancelled || attempt >= MAX_RETRIES) throw e;
+                long waitMs = (long) Math.pow(2, attempt - 1) * 1000;
+                Log.d(TAG, "Retrying in " + waitMs + "ms...");
+                try { Thread.sleep(waitMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
+            }
+        }
+        throw lastError != null ? lastError : new IOException("Download failed");
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private void attemptDownload(String downloadUrl, String suggestedFileName, String callingPackage) throws IOException {
         HttpURLConnection connection = null;
         InputStream httpIn = null;
-        File tempFile = null;
+        ContentResolver cr = getContentResolver();
+
+        Uri destUri = null;
+        OutputStream destOut = null;
+        ParcelFileDescriptor safPfd = null;
+        boolean isSaf = false;
+        String savedFileName = null;
+        String folderName = null;
+
         try {
+            // --- 1. Open HTTP connection ---
             URL url = new URL(downloadUrl);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(30000);
-            connection.setReadTimeout(30000);
+            connection.setConnectTimeout(CONNECT_TIMEOUT);
+            connection.setReadTimeout(READ_TIMEOUT);
             connection.setInstanceFollowRedirects(true);
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) SaveCopy");
 
             int responseCode = connection.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                throw new IOException("HTTP error: " + responseCode);
+                throw new IOException("HTTP " + responseCode);
             }
 
             String contentType = connection.getContentType();
@@ -242,76 +342,164 @@ public class DownloadService extends Service {
                 fileName = suggestedFileName != null ? suggestedFileName : "download";
             }
             if (!fileName.contains(".")) {
-                String extension = getExtensionFromMimeType(contentType);
-                if (extension != null) fileName = fileName + extension;
+                String ext = getExtensionFromMimeType(contentType);
+                if (ext != null) fileName = fileName + ext;
             }
 
             Log.d(TAG, "Downloading: " + fileName + " (size: " + contentLength + ", type: " + contentType + ")");
 
             totalSize = contentLength;
             downloadedSize = 0;
-            httpIn = connection.getInputStream();
+            lastUpdateTime = 0;
+            lastUpdateBytes = 0;
+            downloadStartTime = System.currentTimeMillis();
 
-            // Step 1: download to temp file via standard Java I/O
-            tempFile = new File(getCacheDir(), "dl_" + System.currentTimeMillis());
-            Log.d(TAG, "Temp file: " + tempFile);
-            try (OutputStream tempOut = new FileOutputStream(tempFile)) {
-                byte[] buf = new byte[BUFFER_SIZE];
-                int n;
-                while ((n = httpIn.read(buf)) != -1) {
-                    tempOut.write(buf, 0, n);
-                    downloadedSize += n;
-                    updateProgressNotification(downloadedSize, totalSize);
-                }
-                tempOut.flush();
+            // --- 2. Create destination file BEFORE downloading ---
+            boolean useCustomFolder = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                    .getBoolean(Settings.KEY_USE_CUSTOM_FOLDER, false);
+            String customFolderPath = null;
+            if (useCustomFolder) {
+                customFolderPath = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                        .getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
             }
-            Log.d(TAG, "Downloaded " + downloadedSize + " bytes to temp");
 
-            // Close HTTP before SAF
-            httpIn.close();
-            httpIn = null;
-            connection.disconnect();
-            connection = null;
+            if (customFolderPath != null) {
+                // SAF path
+                isSaf = true;
+                Uri treeUri = Uri.parse(customFolderPath);
+                Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri,
+                        DocumentsContract.getTreeDocumentId(treeUri));
+                String mimeType = FileUtils.getMimeTypeForFileName(fileName);
+                Log.d(TAG, "SAF createDocument: mimeType=" + mimeType + ", fileName=" + fileName);
 
-            // Step 2: copy temp file to destination
-            try (InputStream fileIn = new FileInputStream(tempFile)) {
-                String savedResult = saveToDownloads(fileIn, fileName, callingPackage);
+                destUri = null;
+                try {
+                    destUri = DocumentsContract.createDocument(cr, docUri, mimeType, fileName);
+                } catch (Exception e) {
+                    Log.d(TAG, "SAF createDocument failed, trying dedup", e);
+                }
 
-                String savedFileName;
-                String folderName = null;
-                if (savedResult.contains("|")) {
-                    String[] parts = savedResult.split("\\|", 2);
-                    savedFileName = parts[0];
-                    folderName = parts[1];
+                if (destUri == null) {
+                    String[] parts = FileUtils.spiltFileName(fileName);
+                    for (int i = 1; i <= 999 && destUri == null; i++) {
+                        String dedupName = parts[0] + " (" + i + ")" + parts[1];
+                        try {
+                            destUri = DocumentsContract.createDocument(cr, docUri, mimeType, dedupName);
+                            if (destUri != null) {
+                                fileName = dedupName;
+                                Log.d(TAG, "SAF dedup succeeded: " + dedupName);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                if (destUri == null) throw new IOException("Failed to create file in custom folder");
+
+                safPfd = cr.openFileDescriptor(destUri, "w");
+                if (safPfd == null) throw new IOException("Failed to open SAF fd");
+                destOut = new FileOutputStream(safPfd.getFileDescriptor());
+
+                folderName = treeUri.getLastPathSegment();
+                if (folderName != null) {
+                    folderName = folderName.replace("tree:", "").replace("primary:", "");
+                }
+            } else {
+                // MediaStore path
+                String downloadDir = Environment.DIRECTORY_DOWNLOADS;
+                if (callingPackage != null && getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                        .getBoolean(Settings.KEY_PREFER_APP_FOLDER, false)) {
+                    String label = loadLabelForPackage(callingPackage);
+                    downloadDir += (label != null ? "/" + label : "");
+                }
+
+                ContentValues values = new ContentValues();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, downloadDir);
+                    values.put(MediaStore.MediaColumns.IS_PENDING, true);
                 } else {
-                    savedFileName = savedResult;
+                    java.io.File parent = new java.io.File(Environment.getExternalStorageDirectory(), downloadDir);
+                    values.put(MediaStore.MediaColumns.DATA, new java.io.File(parent, fileName).getPath());
+                    parent.mkdirs();
                 }
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
 
-                final String fn = savedFileName;
-                final String fld = folderName;
+                Uri tableUri = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        ? MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        : MediaStore.Files.getContentUri("external");
 
-                Log.d(TAG, "Download complete, posting success notification");
-                // Keep foreground notification, post success with different ID
-                if (notificationManager != null) {
-                    notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, null));
+                destUri = cr.insert(tableUri, values);
+                if (destUri == null) throw new IOException("Failed to create MediaStore entry");
+
+                destOut = cr.openOutputStream(destUri, "w");
+                if (destOut == null) {
+                    cr.delete(destUri, null, null);
+                    throw new IOException("Failed to open output stream");
                 }
-                // Now remove the progress notification
-                stopForeground(true);
-
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    String msg;
-                    if (fld != null) msg = getString(R.string.toast_saved_custom, fn, fld);
-                    else msg = getString(R.string.toast_saved, fn);
-                    android.widget.Toast.makeText(DownloadService.this, msg, android.widget.Toast.LENGTH_LONG).show();
-                });
-
-                notifyCallback(savedFileName, null);
             }
+
+            // --- 3. Stream HTTP directly to destination (no temp file) ---
+            httpIn = connection.getInputStream();
+            byte[] buf = new byte[BUFFER_SIZE];
+            int n;
+            while ((n = httpIn.read(buf)) != -1) {
+                if (cancelled) throw new IOException("Download cancelled");
+                destOut.write(buf, 0, n);
+                downloadedSize += n;
+                updateProgressNotification(downloadedSize, totalSize);
+            }
+            destOut.flush();
+            Log.d(TAG, "Streamed " + downloadedSize + " bytes directly to destination");
+
+            // --- 4. Finalize ---
+            if (!isSaf && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.IS_PENDING, false);
+                cr.update(destUri, values, null, null);
+            }
+
+            savedFileName = fileName;
+            if (!isSaf) {
+                try (Cursor cursor = cr.query(destUri,
+                        new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int idx = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
+                        if (idx != -1) {
+                            String name = cursor.getString(idx);
+                            if (name != null && !name.isEmpty()) savedFileName = name;
+                        }
+                    }
+                }
+            }
+
+            // --- 5. Success ---
+            final String fn = savedFileName;
+            final String fld = folderName;
+
+            Log.d(TAG, "Download complete: " + fn);
+            if (notificationManager != null) {
+                notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, null));
+            }
+            stopForeground(true);
+
+            new Handler(Looper.getMainLooper()).post(() -> {
+                String msg;
+                if (fld != null) msg = getString(R.string.toast_saved_custom, fn, fld);
+                else msg = getString(R.string.toast_saved, fn);
+                android.widget.Toast.makeText(DownloadService.this, msg, android.widget.Toast.LENGTH_LONG).show();
+            });
+
+            notifyCallback(fn, null);
 
         } finally {
             if (httpIn != null) try { httpIn.close(); } catch (IOException ignored) {}
+            if (destOut != null) try { destOut.close(); } catch (IOException ignored) {}
+            if (safPfd != null) try { safPfd.close(); } catch (IOException ignored) {}
             if (connection != null) connection.disconnect();
-            if (tempFile != null && tempFile.exists()) tempFile.delete();
+
+            // Clean up partial file on failure
+            if (savedFileName == null && destUri != null) {
+                try { cr.delete(destUri, null, null); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -402,163 +590,6 @@ public class DownloadService extends Service {
                     return "." + subtype.replaceAll("[^a-z0-9]", "");
                 }
                 return null;
-        }
-    }
-
-    @SuppressLint("WakelockTimeout")
-    private String saveToDownloads(InputStream inputStream, String fileName, String callingPackage) throws IOException {
-        Context context = this;
-        ContentResolver contentResolver = context.getContentResolver();
-
-        // Check if custom folder is enabled
-        boolean useCustomFolder = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE).getBoolean(Settings.KEY_USE_CUSTOM_FOLDER, false);
-        String customFolderPath = null;
-        if (useCustomFolder) {
-            customFolderPath = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE).getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
-        }
-
-        Uri fileUri;
-        String finalFileName = fileName;
-
-        if (customFolderPath != null) {
-            // Use custom folder via SAF
-            Uri treeUri = Uri.parse(customFolderPath);
-            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri));
-
-            // Guess mime type from file extension
-            String mimeType = FileUtils.getMimeTypeForFileName(fileName);
-            Log.d(TAG, "SAF createDocument: mimeType=" + mimeType + ", fileName=" + fileName);
-
-            // Create file in the custom folder with deduplication
-            fileUri = null;
-            try {
-                fileUri = DocumentsContract.createDocument(contentResolver, docUri, mimeType, fileName);
-            } catch (Exception e) {
-                Log.d(TAG, "SAF createDocument failed, trying deduplication", e);
-            }
-
-            // If file exists, try with (1), (2), ... suffixes
-            if (fileUri == null) {
-                String[] parts = FileUtils.spiltFileName(fileName);
-                String baseName = parts[0];
-                String ext = parts[1];
-                for (int i = 1; i <= 999 && fileUri == null; i++) {
-                    String dedupName = baseName + " (" + i + ")" + ext;
-                    try {
-                        fileUri = DocumentsContract.createDocument(contentResolver, docUri, mimeType, dedupName);
-                        if (fileUri != null) {
-                            fileName = dedupName;
-                            finalFileName = dedupName;
-                            Log.d(TAG, "SAF deduplication succeeded: " + dedupName);
-                        }
-                    } catch (Exception e) {
-                        Log.d(TAG, "SAF deduplication attempt " + i + " failed", e);
-                    }
-                }
-            }
-
-            if (fileUri == null) {
-                throw new IOException("Failed to create file in custom folder");
-            }
-
-            // Write via ParcelFileDescriptor (bypasses SAF pipe limit)
-            try (ParcelFileDescriptor pfd = contentResolver.openFileDescriptor(fileUri, "w")) {
-                if (pfd == null) throw new IOException("Failed to open SAF fd");
-                try (OutputStream out = new FileOutputStream(pfd.getFileDescriptor())) {
-                    byte[] buf = new byte[BUFFER_SIZE];
-                    int n;
-                    long w = 0;
-                    while ((n = inputStream.read(buf)) != -1) {
-                        out.write(buf, 0, n);
-                        out.flush();
-                        w += n;
-                    }
-                    Log.d(TAG, "SAF wrote " + w + " bytes");
-                }
-            }
-
-            // Return the folder name for display
-            String folderName = treeUri.getLastPathSegment();
-            if (folderName != null) {
-                folderName = folderName.replace("tree:", "").replace("primary:", "");
-            }
-            return fileName + "|" + (folderName != null ? folderName : "custom folder");
-        } else {
-            // Use default MediaStore approach
-            String downloadDir = Environment.DIRECTORY_DOWNLOADS;
-            if (callingPackage != null && getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE).getBoolean(Settings.KEY_PREFER_APP_FOLDER, false)) {
-                String label = loadLabelForPackage(callingPackage);
-                downloadDir += (label != null ? "/" + label : "");
-            }
-
-            ContentValues values = new ContentValues();
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, downloadDir);
-                values.put(MediaStore.MediaColumns.IS_PENDING, true);
-            } else {
-                java.io.File parent = new java.io.File(Environment.getExternalStorageDirectory(), downloadDir);
-                values.put(MediaStore.MediaColumns.DATA, new java.io.File(parent, fileName).getPath());
-                //noinspection ResultOfMethodCallIgnored
-                parent.mkdirs();
-            }
-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
-
-            Uri tableUri;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                tableUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
-            } else {
-                tableUri = MediaStore.Files.getContentUri("external");
-            }
-
-            fileUri = contentResolver.insert(tableUri, values);
-            if (fileUri == null) {
-                throw new IOException("Failed to create MediaStore entry");
-            }
-
-            OutputStream outputStream = contentResolver.openOutputStream(fileUri, "w");
-            if (outputStream == null) {
-                contentResolver.delete(fileUri, null, null);
-                throw new IOException("Failed to open output stream");
-            }
-
-            byte[] buffer = new byte[BUFFER_SIZE];
-            int bytesRead;
-
-            try {
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                    outputStream.flush();
-                    downloadedSize += bytesRead;
-                    updateProgressNotification(downloadedSize, totalSize);
-                }
-            } finally {
-                outputStream.close();
-            }
-
-            Log.d(TAG, "Downloaded " + downloadedSize + " bytes");
-
-            // Mark as not pending on Android 10+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values = new ContentValues();
-                values.put(MediaStore.MediaColumns.IS_PENDING, false);
-                contentResolver.update(fileUri, values, null, null);
-            }
-
-            // Get final filename (may have been modified by MediaStore)
-            try (Cursor cursor = contentResolver.query(fileUri, new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
-                if (cursor != null && cursor.moveToFirst()) {
-                    int index = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
-                    if (index != -1) {
-                        String name = cursor.getString(index);
-                        if (name != null && !name.isEmpty()) {
-                            finalFileName = name;
-                        }
-                    }
-                }
-            }
-
-            return finalFileName;
         }
     }
 
