@@ -10,6 +10,11 @@
 -keepattributes InnerClasses
 -keepattributes EnclosingMethod
 
+# Override proguard-android-optimize.txt: only strip verbose logs, keep debug/info
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+}
+
 # Don't warn about missing classes from optional dependencies
 -dontwarn com.github.LJINBIN.**
 -dontwarn androidx.documentfile.**

@@ -189,9 +189,16 @@ public class SaveActivity extends Activity {
             }
         }
         
-        // Set type from original intent
+        // Copy data URI and type (use setDataAndType to avoid mutual clearing)
+        Uri data = getIntent().getData();
         String type = getIntent().getType();
-        if (type != null) {
+        if (data != null && type != null) {
+            intent.setDataAndType(data, type);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } else if (data != null) {
+            intent.setData(data);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } else if (type != null) {
             intent.setType(type);
         }
         
