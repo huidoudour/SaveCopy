@@ -76,9 +76,16 @@ public class SaveActivity extends Activity {
                             }
                         }
                         
-                        // Copy type and text extras
+                        // Copy type and data URI
+                        Uri data = getIntent().getData();
                         String type = getIntent().getType();
-                        if (type != null) {
+                        if (data != null && type != null) {
+                            intent.setDataAndType(data, type);
+                            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } else if (data != null) {
+                            intent.setData(data);
+                            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } else if (type != null) {
                             intent.setType(type);
                         }
                         if (getIntent().hasExtra(Intent.EXTRA_TEXT)) {
