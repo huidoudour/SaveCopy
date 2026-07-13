@@ -1,6 +1,5 @@
 package app.rikka.savecopy;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -10,9 +9,12 @@ import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+
 import app.rikka.savecopy.databinding.SettingsActivityBinding;
 
-public class SettingsActivity extends Activity {
+public class SettingsActivity extends ComponentActivity {
 
     private static final String TAG = "SettingsActivity";
     private static final int REQUEST_CODE_SELECT_FOLDER = 1001;
@@ -63,6 +65,15 @@ public class SettingsActivity extends Activity {
                 if (isChecked) {
                     Log.d(TAG, "unchecking preferAppFolder due to useCustomFolder");
                     binding.preferAppFolder.setChecked(false);
+                }
+            });
+
+            // Register back-pressed dispatcher
+            getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                    Log.d(TAG, "handleOnBackPressed");
+                    finish();
                 }
             });
 
@@ -189,9 +200,5 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    @Override
-    public void onBackPressed() {
-        Log.d(TAG, "onBackPressed");
-        super.onBackPressed();
-    }
+
 }

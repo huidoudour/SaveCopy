@@ -30,7 +30,6 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:requestLegacyExternalStorage="@bool/config_requestLegacyExternalStorage"
-        android:extractNativeLibs="true"
         android:supportsRtl="true"
         tools:ignore="AllowBackup" >
         <activity

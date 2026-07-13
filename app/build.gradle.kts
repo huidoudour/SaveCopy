@@ -15,8 +15,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 16
-        versionName = "26.16.0611"
+        versionCode = 18
+        versionName = "26.18.0713-β"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -60,6 +60,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            @Suppress("UnstableApiUsage")
             optimization {
                 enable = false
             }

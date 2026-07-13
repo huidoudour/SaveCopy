@@ -1,6 +1,5 @@
 package app.rikka.savecopy;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Intent;
@@ -10,9 +9,12 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.TextView;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+
 import java.util.ArrayList;
 
-public class ChoiceActivity extends Activity {
+public class ChoiceActivity extends ComponentActivity {
 
     private AlertDialog dialog;
 
@@ -87,16 +89,28 @@ public class ChoiceActivity extends Activity {
                 .setOnDismissListener(d -> finish())
                 .create();
         dialog.show();
+
+        // Register back-pressed dispatcher (only need to dismiss dialog, OnDismissListener will call finish)
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (dialog != null && dialog.isShowing()) {
+                    dialog.dismiss();
+                } else {
+                    finish();
+                }
+            }
+        });
     }
 
-    private void dismissDialogAndStart(Class<? extends Activity> activityClass) {
+    private void dismissDialogAndStart(Class<? extends ComponentActivity> activityClass) {
         if (dialog != null && dialog.isShowing()) {
             dialog.dismiss();
         }
         startChosenActivity(activityClass);
     }
 
-    private void startChosenActivity(Class<? extends Activity> activityClass) {
+    private void startChosenActivity(Class<? extends ComponentActivity> activityClass) {
         Intent intent = new Intent(this, activityClass);
         intent.setAction(getIntent().getAction());
 
@@ -196,9 +210,5 @@ public class ChoiceActivity extends Activity {
         return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 
-    @Override
-    public void onBackPressed() {
-        super.onBackPressed();
-        finish();
-    }
+
 }

@@ -1,7 +1,6 @@
 package app.rikka.savecopy;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Context;
@@ -13,11 +12,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
 import androidx.annotation.NonNull;
 
 import java.util.ArrayList;
 
-public class SaveActivity extends Activity {
+public class SaveActivity extends ComponentActivity {
 
     private static final int PERMISSION_REQUEST_CODE = 1;
 

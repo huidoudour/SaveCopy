@@ -1,7 +1,6 @@
 package app.rikka.savecopy;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -14,7 +13,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.widget.Toast;
 
-public class DownloadActivity extends Activity {
+import androidx.activity.ComponentActivity;
+
+public class DownloadActivity extends ComponentActivity {
 
     private static final int PERMISSION_REQUEST_CODE = 2;
     private static final String CHANNEL_ID = "download_channel";
