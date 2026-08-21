@@ -269,6 +269,7 @@ public class DownloadActivity extends ComponentActivity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 100) {
             createNotificationChannel();
             checkPermission();

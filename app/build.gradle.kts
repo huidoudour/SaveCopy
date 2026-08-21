@@ -60,7 +60,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            @Suppress("UnstableApiUsage")
             optimization {
                 enable = false
             }

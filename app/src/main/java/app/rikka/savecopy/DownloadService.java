@@ -32,7 +32,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -44,12 +47,13 @@ public class DownloadService extends Service {
 
     private static final String TAG = "DownloadService";
     private static final int NOTIFICATION_ID = 1001;
-    private static final int BUFFER_SIZE = 8192;
+    private static final int BUFFER_SIZE = 64 * 1024;
     private static final String CHANNEL_ID = "download_channel";
     private static final int MAX_RETRIES = 3;
-    private static final long PROGRESS_INTERVAL_MS = 500;
-    private static final int CONNECT_TIMEOUT = 15000;
-    private static final int READ_TIMEOUT = 30000;
+    private static final long PROGRESS_INTERVAL_MS = 1000;
+    private static final int CONNECT_TIMEOUT = 20000;
+    private static final int READ_TIMEOUT = 60000;
+    private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
 
     public static final String EXTRA_DOWNLOAD_URL = "download_url";
     public static final String EXTRA_FILE_NAME = "file_name";
@@ -61,6 +65,14 @@ public class DownloadService extends Service {
     private NotificationManager notificationManager;
     private Notification.Builder progressBuilder;
     private volatile boolean cancelled;
+    private volatile Thread downloadThread;
+    private volatile HttpURLConnection currentConnection;
+
+    // 断点续传状态：目标文件只在第一次 attempt 创建，重试时复用并追加下载
+    private Uri currentDestUri;
+    private boolean currentIsSaf;
+    private String currentFileName;
+
     private long totalSize;
     private long downloadedSize;
     private long lastUpdateTime;
@@ -92,6 +104,9 @@ public class DownloadService extends Service {
         if (ACTION_CANCEL.equals(intent.getAction())) {
             Log.d(TAG, "Download cancelled by user");
             cancelled = true;
+            // 中断阻塞中的网络读写，让下载线程尽快退出并清理半成品
+            if (downloadThread != null) downloadThread.interrupt();
+            if (currentConnection != null) currentConnection.disconnect();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
@@ -116,16 +131,23 @@ public class DownloadService extends Service {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
 
         // Execute download in background thread
-        new Thread(() -> {
+        downloadThread = new Thread(() -> {
             try {
                 doDownload(downloadUrl, fileName, callingPackage);
             } catch (Exception e) {
-                Log.e(TAG, "Download failed", e);
-                notifyCallback(null, e.getMessage());
-                showErrorNotification(e.getMessage());
+                if (cancelled) {
+                    // 用户主动取消：不弹错误通知
+                    Log.d(TAG, "Download cancelled: " + e.getMessage());
+                    notifyCallback(null, "cancelled");
+                } else {
+                    Log.e(TAG, "Download failed", e);
+                    notifyCallback(null, e.getMessage());
+                    showErrorNotification(e.getMessage());
+                }
             }
             stopSelf();
-        }).start();
+        });
+        downloadThread.start();
 
         return START_NOT_STICKY;
     }
@@ -210,10 +232,12 @@ public class DownloadService extends Service {
         Intent notificationIntent;
         if (fileUri != null) {
             notificationIntent = new Intent(Intent.ACTION_VIEW);
-            notificationIntent.setDataAndType(fileUri, "*/*");
+            String mimeType = FileUtils.getMimeTypeForFileName(fileName);
+            notificationIntent.setDataAndType(fileUri, mimeType != null ? mimeType : "*/*");
             notificationIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         } else {
-            notificationIntent = new Intent();
+            // 兜底：打开 app 主界面
+            notificationIntent = new Intent(this, InfoActivity.class);
         }
 
         PendingIntent pendingIntent;
@@ -253,10 +277,16 @@ public class DownloadService extends Service {
         } else {
             builder = new Notification.Builder(this);
         }
+        Intent intent = new Intent(this, InfoActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
         Notification notification = builder
                 .setContentTitle(getString(R.string.notification_error_title))
                 .setContentText(error != null ? error : getString(R.string.notification_error_text))
                 .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .build();
         notificationManager.notify(NOTIFICATION_ID, notification);
@@ -288,6 +318,7 @@ public class DownloadService extends Service {
         IOException lastError = null;
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             if (cancelled) {
+                cleanupPartialFile();
                 throw new IOException("Download cancelled");
             }
             try {
@@ -296,10 +327,19 @@ public class DownloadService extends Service {
             } catch (IOException e) {
                 lastError = e;
                 Log.w(TAG, "Attempt " + attempt + "/" + MAX_RETRIES + " failed: " + e.getMessage());
-                if (cancelled || attempt >= MAX_RETRIES) throw e;
+                // 取消、重试耗尽或不可重试错误：清理半成品后放弃
+                if (cancelled || attempt >= MAX_RETRIES || !isRetryable(e)) {
+                    cleanupPartialFile();
+                    throw e;
+                }
+                // 可重试错误：保留已下载部分，下次 attempt 用 Range 断点续传
                 long waitMs = (long) Math.pow(2, attempt - 1) * 1000;
                 Log.d(TAG, "Retrying in " + waitMs + "ms...");
-                try { Thread.sleep(waitMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
+                try { Thread.sleep(waitMs); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    cleanupPartialFile();
+                    throw e;
+                }
             }
         }
         throw lastError != null ? lastError : new IOException("Download failed");
@@ -311,146 +351,201 @@ public class DownloadService extends Service {
         InputStream httpIn = null;
         ContentResolver cr = getContentResolver();
 
-        Uri destUri = null;
-        OutputStream destOut = null;
+        Uri destUri = currentDestUri;
+        FileOutputStream destOut = null;
         ParcelFileDescriptor safPfd = null;
-        boolean isSaf = false;
+        boolean isSaf = currentIsSaf;
         String savedFileName = null;
         String folderName = null;
+        boolean truncate = false;
+        boolean skipStream = false;
+        long startByte = 0;
 
         try {
-            // --- 1. Open HTTP connection ---
-            URL url = new URL(downloadUrl);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(CONNECT_TIMEOUT);
-            connection.setReadTimeout(READ_TIMEOUT);
-            connection.setInstanceFollowRedirects(true);
-            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) SaveCopy");
+            // --- 1. Open HTTP connection (Range header enables resume) ---
+            if (destUri != null) {
+                startByte = queryExistingSize(destUri, isSaf);
+                Log.d(TAG, "Resuming download at byte " + startByte);
+            }
 
+            URL url = new URL(downloadUrl);
+            connection = openHttpConnection(url, startByte);
+            currentConnection = connection;
             int responseCode = connection.getResponseCode();
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                throw new IOException("HTTP " + responseCode);
+
+            // 416: server file changed; clear partial data and restart once
+            if (responseCode == HTTP_RANGE_NOT_SATISFIABLE && startByte > 0) {
+                long rangeTotal = parseContentRangeTotal(connection.getHeaderField("Content-Range"));
+                if (rangeTotal > 0 && startByte >= rangeTotal) {
+                    // 上次已下载完整但 finalize 失败，直接完成
+                    Log.d(TAG, "File already complete (" + startByte + "/" + rangeTotal + " bytes)");
+                    totalSize = rangeTotal;
+                    downloadedSize = startByte;
+                    skipStream = true;
+                } else {
+                    Log.d(TAG, "Server file changed (416), restarting from scratch");
+                    startByte = 0;
+                    truncate = true;
+                    connection.disconnect();
+                    connection = openHttpConnection(url, 0);
+                    currentConnection = connection;
+                    responseCode = connection.getResponseCode();
+                }
             }
 
             String contentType = connection.getContentType();
             String contentDisposition = connection.getHeaderField("Content-Disposition");
             long contentLength = connection.getContentLength();
 
-            String fileName = extractFileName(contentDisposition, downloadUrl);
-            if (fileName == null || fileName.isEmpty()) {
-                fileName = suggestedFileName != null ? suggestedFileName : "download";
-            }
-            if (!fileName.contains(".")) {
-                String ext = getExtensionFromMimeType(contentType);
-                if (ext != null) fileName = fileName + ext;
-            }
+            if (!skipStream) {
+                if (responseCode == HttpURLConnection.HTTP_PARTIAL) {
+                    Log.d(TAG, "Server supports range, resuming from byte " + startByte);
+                } else if (responseCode == HttpURLConnection.HTTP_OK) {
+                    if (startByte > 0) {
+                        Log.d(TAG, "Server ignored Range, restarting from scratch");
+                        truncate = true;
+                        startByte = 0;
+                    }
+                } else {
+                    throw new IOException("HTTP " + responseCode);
+                }
 
-            Log.d(TAG, "Downloading: " + fileName + " (size: " + contentLength + ", type: " + contentType + ")");
-
-            totalSize = contentLength;
-            downloadedSize = 0;
+                totalSize = contentLength;
+                if (responseCode == HttpURLConnection.HTTP_PARTIAL) {
+                    long rangeTotal = parseContentRangeTotal(connection.getHeaderField("Content-Range"));
+                    totalSize = rangeTotal > 0 ? rangeTotal
+                            : (contentLength > 0 ? startByte + contentLength : -1);
+                }
+            }
+            downloadedSize = startByte;
             lastUpdateTime = 0;
-            lastUpdateBytes = 0;
+            lastUpdateBytes = startByte;
             downloadStartTime = System.currentTimeMillis();
 
-            // --- 2. Create destination file BEFORE downloading ---
-            boolean useCustomFolder = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
-                    .getBoolean(Settings.KEY_USE_CUSTOM_FOLDER, false);
-            String customFolderPath = null;
-            if (useCustomFolder) {
-                customFolderPath = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
-                        .getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
+            // --- 2. Determine file name ---
+            String fileName;
+            if (destUri != null) {
+                // 重试时复用已创建的文件，避免 MediaStore/SAF 产生重复条目
+                fileName = currentFileName;
+            } else {
+                fileName = extractFileName(contentDisposition, downloadUrl);
+                if (fileName == null || fileName.isEmpty()) {
+                    fileName = suggestedFileName != null ? suggestedFileName : "download";
+                }
+                if (!fileName.contains(".")) {
+                    String ext = getExtensionFromMimeType(contentType);
+                    if (ext != null) fileName = fileName + ext;
+                }
             }
 
-            if (customFolderPath != null) {
-                // SAF path
-                isSaf = true;
-                Uri treeUri = Uri.parse(customFolderPath);
-                Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri,
-                        DocumentsContract.getTreeDocumentId(treeUri));
-                String mimeType = FileUtils.getMimeTypeForFileName(fileName);
-                Log.d(TAG, "SAF createDocument: mimeType=" + mimeType + ", fileName=" + fileName);
+            Log.d(TAG, "Downloading: " + fileName + " (size: " + totalSize + ", type: " + contentType + ")");
 
-                destUri = null;
-                try {
-                    destUri = DocumentsContract.createDocument(cr, docUri, mimeType, fileName);
-                } catch (Exception e) {
-                    Log.d(TAG, "SAF createDocument failed, trying dedup", e);
+            // --- 3. Create destination file once (reused across retries) ---
+            if (destUri == null) {
+                boolean useCustomFolder = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                        .getBoolean(Settings.KEY_USE_CUSTOM_FOLDER, false);
+                String customFolderPath = null;
+                if (useCustomFolder) {
+                    customFolderPath = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                            .getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
                 }
 
-                if (destUri == null) {
-                    String[] parts = FileUtils.spiltFileName(fileName);
-                    for (int i = 1; i <= 999 && destUri == null; i++) {
-                        String dedupName = parts[0] + " (" + i + ")" + parts[1];
-                        try {
-                            destUri = DocumentsContract.createDocument(cr, docUri, mimeType, dedupName);
-                            if (destUri != null) {
-                                fileName = dedupName;
-                                Log.d(TAG, "SAF dedup succeeded: " + dedupName);
-                            }
-                        } catch (Exception ignored) {}
+                if (customFolderPath != null) {
+                    // SAF path
+                    isSaf = true;
+                    Uri treeUri = Uri.parse(customFolderPath);
+                    Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri,
+                            DocumentsContract.getTreeDocumentId(treeUri));
+                    String mimeType = FileUtils.getMimeTypeForFileName(fileName);
+                    Log.d(TAG, "SAF createDocument: mimeType=" + mimeType + ", fileName=" + fileName);
+
+                    destUri = null;
+                    try {
+                        destUri = DocumentsContract.createDocument(cr, docUri, mimeType, fileName);
+                    } catch (Exception e) {
+                        Log.d(TAG, "SAF createDocument failed, trying dedup", e);
                     }
-                }
 
-                if (destUri == null) throw new IOException("Failed to create file in custom folder");
+                    if (destUri == null) {
+                        String[] parts = FileUtils.spiltFileName(fileName);
+                        for (int i = 1; i <= 999 && destUri == null; i++) {
+                            String dedupName = parts[0] + " (" + i + ")" + parts[1];
+                            try {
+                                destUri = DocumentsContract.createDocument(cr, docUri, mimeType, dedupName);
+                                if (destUri != null) {
+                                    fileName = dedupName;
+                                    Log.d(TAG, "SAF dedup succeeded: " + dedupName);
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                    }
 
-                safPfd = cr.openFileDescriptor(destUri, "w");
-                if (safPfd == null) throw new IOException("Failed to open SAF fd");
-                destOut = new FileOutputStream(safPfd.getFileDescriptor());
+                    if (destUri == null) throw new IOException("Failed to create file in custom folder");
 
-                folderName = treeUri.getLastPathSegment();
-                if (folderName != null) {
-                    folderName = folderName.replace("tree:", "").replace("primary:", "");
-                }
-            } else {
-                // MediaStore path
-                String downloadDir = Environment.DIRECTORY_DOWNLOADS;
-                if (callingPackage != null && getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
-                        .getBoolean(Settings.KEY_PREFER_APP_FOLDER, false)) {
-                    String label = loadLabelForPackage(callingPackage);
-                    downloadDir += (label != null ? "/" + label : "");
-                }
-
-                ContentValues values = new ContentValues();
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, downloadDir);
-                    values.put(MediaStore.MediaColumns.IS_PENDING, true);
+                    folderName = treeUri.getLastPathSegment();
+                    if (folderName != null) {
+                        folderName = folderName.replace("tree:", "").replace("primary:", "");
+                    }
                 } else {
-                    java.io.File parent = new java.io.File(Environment.getExternalStorageDirectory(), downloadDir);
-                    values.put(MediaStore.MediaColumns.DATA, new java.io.File(parent, fileName).getPath());
-                    parent.mkdirs();
+                    // MediaStore path
+                    String downloadDir = Environment.DIRECTORY_DOWNLOADS;
+                    if (callingPackage != null && getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE)
+                            .getBoolean(Settings.KEY_PREFER_APP_FOLDER, false)) {
+                        String label = loadLabelForPackage(callingPackage);
+                        downloadDir += (label != null ? "/" + label : "");
+                    }
+
+                    ContentValues values = new ContentValues();
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        values.put(MediaStore.MediaColumns.RELATIVE_PATH, downloadDir);
+                        values.put(MediaStore.MediaColumns.IS_PENDING, true);
+                    } else {
+                        java.io.File parent = new java.io.File(Environment.getExternalStorageDirectory(), downloadDir);
+                        values.put(MediaStore.MediaColumns.DATA, new java.io.File(parent, fileName).getPath());
+                        parent.mkdirs();
+                    }
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+
+                    Uri tableUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+
+                    destUri = cr.insert(tableUri, values);
+                    if (destUri == null) throw new IOException("Failed to create MediaStore entry");
                 }
-                values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
 
-                Uri tableUri = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-                        ? MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                        : MediaStore.Files.getContentUri("external");
+                // 记住目标文件，重试时复用以便断点续传
+                currentDestUri = destUri;
+                currentIsSaf = isSaf;
+                currentFileName = fileName;
+            }
 
-                destUri = cr.insert(tableUri, values);
-                if (destUri == null) throw new IOException("Failed to create MediaStore entry");
-
-                destOut = cr.openOutputStream(destUri, "w");
-                if (destOut == null) {
-                    cr.delete(destUri, null, null);
+            // --- 4. Stream HTTP directly to destination (resume if possible) ---
+            if (!skipStream) {
+                String mode = truncate ? "rwt" : "rw";
+                safPfd = cr.openFileDescriptor(destUri, mode);
+                if (safPfd == null) {
+                    cleanupPartialFile();
                     throw new IOException("Failed to open output stream");
                 }
+                destOut = new FileOutputStream(safPfd.getFileDescriptor());
+                if (!truncate && startByte > 0) {
+                    // ParcelFileDescriptor 无 seekTo，用 FileChannel 定位到续传位置
+                    destOut.getChannel().position(startByte);
+                }
+
+                httpIn = connection.getInputStream();
+                byte[] buf = new byte[BUFFER_SIZE];
+                int n;
+                while ((n = httpIn.read(buf)) != -1) {
+                    if (cancelled) throw new IOException("Download cancelled");
+                    destOut.write(buf, 0, n);
+                    downloadedSize += n;
+                    updateProgressNotification(downloadedSize, totalSize);
+                }
+                destOut.flush();
+                Log.d(TAG, "Streamed " + downloadedSize + " bytes directly to destination");
             }
 
-            // --- 3. Stream HTTP directly to destination (no temp file) ---
-            httpIn = connection.getInputStream();
-            byte[] buf = new byte[BUFFER_SIZE];
-            int n;
-            while ((n = httpIn.read(buf)) != -1) {
-                if (cancelled) throw new IOException("Download cancelled");
-                destOut.write(buf, 0, n);
-                downloadedSize += n;
-                updateProgressNotification(downloadedSize, totalSize);
-            }
-            destOut.flush();
-            Log.d(TAG, "Streamed " + downloadedSize + " bytes directly to destination");
-
-            // --- 4. Finalize ---
+            // --- 5. Finalize ---
             if (!isSaf && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.IS_PENDING, false);
@@ -471,13 +566,16 @@ public class DownloadService extends Service {
                 }
             }
 
-            // --- 5. Success ---
+            currentDestUri = null; // 下载完成，无需清理
+
+            // --- 6. Success ---
             final String fn = savedFileName;
             final String fld = folderName;
+            final Uri finalUri = destUri;
 
             Log.d(TAG, "Download complete: " + fn);
             if (notificationManager != null) {
-                notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, null));
+                notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, finalUri));
             }
             stopForeground(true);
 
@@ -495,12 +593,95 @@ public class DownloadService extends Service {
             if (destOut != null) try { destOut.close(); } catch (IOException ignored) {}
             if (safPfd != null) try { safPfd.close(); } catch (IOException ignored) {}
             if (connection != null) connection.disconnect();
+            currentConnection = null;
+            // 半成品清理统一由 doDownload 处理：重试之间保留（断点续传），取消/最终失败时删除
+        }
+    }
 
-            // Clean up partial file on failure
-            if (savedFileName == null && destUri != null) {
-                try { cr.delete(destUri, null, null); } catch (Exception ignored) {}
+    private HttpURLConnection openHttpConnection(URL url, long startByte) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(CONNECT_TIMEOUT);
+        connection.setReadTimeout(READ_TIMEOUT);
+        connection.setInstanceFollowRedirects(true);
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) SaveCopy");
+        if (startByte > 0) {
+            connection.setRequestProperty("Range", "bytes=" + startByte + "-");
+        }
+        return connection;
+    }
+
+    private long queryExistingSize(Uri uri, boolean isSaf) {
+        try {
+            if (isSaf) {
+                try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+                    if (pfd == null) return 0;
+                    long size = pfd.getStatSize();
+                    return size > 0 ? size : 0;
+                }
+            } else {
+                try (Cursor cursor = getContentResolver().query(uri,
+                        new String[]{MediaStore.MediaColumns.SIZE}, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int idx = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE);
+                        if (idx != -1) return cursor.getLong(idx);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to query existing size", e);
+        }
+        return 0;
+    }
+
+    private long parseContentRangeTotal(String contentRange) {
+        if (contentRange == null) return -1;
+        int slash = contentRange.lastIndexOf('/');
+        if (slash < 0) return -1;
+        try {
+            long total = Long.parseLong(contentRange.substring(slash + 1).trim());
+            return total > 0 ? total : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private boolean isRetryable(IOException e) {
+        // 网络类瞬时错误可重试
+        if (e instanceof SocketTimeoutException) return true;
+        if (e instanceof ConnectException || e instanceof UnknownHostException) return true;
+        String msg = e.getMessage();
+        if (msg != null && msg.startsWith("HTTP ")) {
+            // 5xx/408/429 服务端瞬时错误可重试，4xx 客户端错误重试无意义
+            return msg.startsWith("HTTP 5")
+                    || msg.startsWith("HTTP 408")
+                    || msg.startsWith("HTTP 429");
+        }
+        return true;
+    }
+
+    private void cleanupPartialFile() {
+        Uri uri = currentDestUri;
+        if (uri == null) return;
+        Log.d(TAG, "Cleaning up partial file: " + uri);
+        try {
+            if (currentIsSaf) {
+                DocumentsContract.deleteDocument(getContentResolver(), uri);
+            } else {
+                getContentResolver().delete(uri, null, null);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to clean up partial file", e);
+            // MediaStore 条目删除失败时解除隐藏标记，避免留下不可见残留
+            if (!currentIsSaf) {
+                try {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.IS_PENDING, false);
+                    getContentResolver().update(uri, values, null, null);
+                } catch (Exception ignored) {}
             }
         }
+        currentDestUri = null;
     }
 
     private String extractFileName(String contentDisposition, String url) {
