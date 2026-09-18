@@ -1,17 +1,17 @@
 # SaveCopy
 
 ### 个人修改版
- - 添加支持选择的对话框
- - 添加多个功能，自定义保存文件夹
- - 标准保存副本按钮
- - 新增下载副本按钮<br>
+本仓库是基于 [RikkaApps/SaveCopy](https://github.com/RikkaApps/SaveCopy) 的个人修改版本，
+以上游 SaveCopy v2.0.0（提交 `4dd12a8`）为基线。
 
-```text
-此修改仅供学习参考，不得用于其它用途
-此仓库为AI修改版
-```
+主要改动包括：
 
-> 如若侵权，请联系我<br>
+- 添加操作选择对话框与标准保存副本入口
+- 添加下载副本功能
+- 支持自定义保存目录
+
+本项目（包括本仓库中的修改）以 **GNU GPL v3.0** 发布。完整许可证见 [LICENSE](LICENSE)，
+上游来源、基线版本及修改声明见 [NOTICE](NOTICE)。发布 APK 时，应同时提供与该 APK 对应版本的完整、可构建源代码。
 
 [![AI Assisted](https://img.shields.io/badge/AI-Assisted-blue.svg)](https://github.com/RikkaApps/SaveCopy)
 

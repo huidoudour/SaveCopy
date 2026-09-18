@@ -1,0 +1,17 @@
+Save-R
+Copyright (C) 2026 huidoudour
+
+This repository is a modified version of SaveCopy.
+
+Upstream project: https://github.com/RikkaApps/SaveCopy
+Upstream baseline: SaveCopy v2.0.0 (commit 4dd12a8)
+
+The modified version adds, among other changes, an action-selection dialog,
+download support, and configurable save locations.
+
+This work, including the modifications in this repository, is distributed
+under the GNU General Public License, version 3. See LICENSE for the full
+license text.
+
+Save-R is an independent modified version and is not affiliated with or
+endorsed by the upstream project or its contributors.
