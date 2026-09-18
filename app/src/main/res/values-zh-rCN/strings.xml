@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">复制保存</string>
+    <string name="app_name">保存-R</string>
     <string name="save_a_copy">保存副本</string>
     <string name="save_file_copy">保存副本</string>
     <string name="download_file_copy">下载副本</string>

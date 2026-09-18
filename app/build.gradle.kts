@@ -11,7 +11,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "app.rikka.savecopy.revived"
+        applicationId = "me.huidoudour.copysave"
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 36

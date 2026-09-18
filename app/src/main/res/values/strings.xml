@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">CopySave</string>
+    <string name="app_name">Save-R</string>
     <string name="save_a_copy">Save a copy</string>
     <string name="save_file_copy">Save copy</string>
     <string name="download_file_copy">Download copy</string>
