@@ -271,8 +271,13 @@ public class DownloadActivity extends ComponentActivity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 100) {
-            createNotificationChannel();
-            checkPermission();
+            if (grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                createNotificationChannel();
+                checkPermission();
+            } else {
+                showNotificationPermissionRequired();
+            }
             return;
         }
         if (requestCode == PERMISSION_REQUEST_CODE) {
@@ -303,5 +308,24 @@ public class DownloadActivity extends ComponentActivity {
                         .show();
             }
         }
+    }
+
+    private void showNotificationPermissionRequired() {
+        boolean isNight = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_YES) > 0;
+        int theme = isNight ? android.R.style.Theme_DeviceDefault_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
+        new AlertDialog.Builder(this, theme)
+                .setTitle(R.string.dialog_no_notification_permission_title)
+                .setMessage(R.string.dialog_no_notification_permission_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setNeutralButton(R.string.dialog_no_permission_button_app_info, (dialog, which) -> {
+                    Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                    i.addCategory(Intent.CATEGORY_DEFAULT);
+                    i.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(i);
+                })
+                .setOnDismissListener(dialog -> finish())
+                .show();
     }
 }

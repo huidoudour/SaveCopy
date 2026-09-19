@@ -50,7 +50,9 @@ public class DownloadService extends Service {
     private static final int BUFFER_SIZE = 64 * 1024;
     private static final String CHANNEL_ID = "download_channel";
     private static final int MAX_RETRIES = 3;
-    private static final long PROGRESS_INTERVAL_MS = 1000;
+    // Four refreshes per second keeps the notification responsive without flooding
+    // SystemUI with one update for every network buffer.
+    private static final long PROGRESS_INTERVAL_MS = 250;
     private static final int CONNECT_TIMEOUT = 20000;
     private static final int READ_TIMEOUT = 60000;
     private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
@@ -77,7 +79,6 @@ public class DownloadService extends Service {
     private long downloadedSize;
     private long lastUpdateTime;
     private long lastUpdateBytes;
-    private long downloadStartTime;
 
     public interface DownloadCallback {
         void onDownloadComplete(String fileName, String error);
@@ -175,7 +176,7 @@ public class DownloadService extends Service {
             builder = new Notification.Builder(this);
         }
 
-        return builder
+        builder
                 .setContentTitle(getString(R.string.notification_working_title))
                 .setContentText(getString(R.string.toast_start_download, truncateUrl(url)))
                 .setSmallIcon(android.R.drawable.stat_sys_download)
@@ -185,19 +186,29 @@ public class DownloadService extends Service {
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel,
                         getString(android.R.string.cancel), cancelPendingIntent)
                 .setProgress(100, 0, true);
+
+        // Android 12+ may defer a foreground-service notification unless this is
+        // explicitly marked as immediate. A download must be visible right away.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
+        return builder;
     }
 
     private void updateProgressNotification(long current, long total) {
+        updateProgressNotification(current, total, false);
+    }
+
+    private void updateProgressNotification(long current, long total, boolean force) {
         if (progressBuilder == null || notificationManager == null) return;
 
         long now = System.currentTimeMillis();
-        // Throttle updates to avoid UI jank
-        if (now - lastUpdateTime < PROGRESS_INTERVAL_MS && current < total) return;
+        // Refresh from the actual byte count, but avoid sending dozens of
+        // NotificationManager transactions per second for very fast streams.
+        if (!force && now - lastUpdateTime < PROGRESS_INTERVAL_MS
+                && (total <= 0 || current < total)) return;
 
-        long elapsed = now - downloadStartTime;
-        if (elapsed <= 0) elapsed = 1;
-
-        // Calculate speed
+        // Calculate speed from the same bytes used to render the progress bar.
         long bytesSinceLast = current - lastUpdateBytes;
         long timeSinceLast = now - lastUpdateTime;
         if (timeSinceLast <= 0) timeSinceLast = 1;
@@ -211,7 +222,7 @@ public class DownloadService extends Service {
         text.append("  ").append(formatSize(current));
         if (total > 0) {
             text.append("/").append(formatSize(total));
-            int percent = (int) ((current * 100) / total);
+            int percent = (int) Math.min(100, (current * 100) / total);
             progressBuilder.setProgress(100, percent, false);
             // ETA
             long remaining = total - current;
@@ -364,7 +375,7 @@ public class DownloadService extends Service {
         try {
             // --- 1. Open HTTP connection (Range header enables resume) ---
             if (destUri != null) {
-                startByte = queryExistingSize(destUri, isSaf);
+                startByte = queryExistingSize(destUri);
                 Log.d(TAG, "Resuming download at byte " + startByte);
             }
 
@@ -395,7 +406,9 @@ public class DownloadService extends Service {
 
             String contentType = connection.getContentType();
             String contentDisposition = connection.getHeaderField("Content-Disposition");
-            long contentLength = connection.getContentLength();
+            // getContentLength() is an int and produces incorrect totals above
+            // 2 GB. Use the long variant so the displayed percentage is exact.
+            long contentLength = connection.getContentLengthLong();
 
             if (!skipStream) {
                 if (responseCode == HttpURLConnection.HTTP_PARTIAL) {
@@ -418,9 +431,15 @@ public class DownloadService extends Service {
                 }
             }
             downloadedSize = startByte;
-            lastUpdateTime = 0;
+            // Establish a real timestamp before the first update. Previously the
+            // first speed calculation used epoch time and always appeared as 0.
+            lastUpdateTime = System.currentTimeMillis();
             lastUpdateBytes = startByte;
-            downloadStartTime = System.currentTimeMillis();
+
+            // Switch from the indeterminate "connecting" state to an exact
+            // percentage as soon as HTTP has provided a total size. This also
+            // makes resumed downloads show their true starting position.
+            updateProgressNotification(downloadedSize, totalSize, true);
 
             // --- 2. Determine file name ---
             String fileName;
@@ -611,22 +630,15 @@ public class DownloadService extends Service {
         return connection;
     }
 
-    private long queryExistingSize(Uri uri, boolean isSaf) {
+    private long queryExistingSize(Uri uri) {
         try {
-            if (isSaf) {
-                try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
-                    if (pfd == null) return 0;
-                    long size = pfd.getStatSize();
-                    return size > 0 ? size : 0;
-                }
-            } else {
-                try (Cursor cursor = getContentResolver().query(uri,
-                        new String[]{MediaStore.MediaColumns.SIZE}, null, null, null)) {
-                    if (cursor != null && cursor.moveToFirst()) {
-                        int idx = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE);
-                        if (idx != -1) return cursor.getLong(idx);
-                    }
-                }
+            // MediaStore may not update its SIZE column for a pending file until
+            // it is published. The descriptor reports the bytes actually on disk
+            // for both MediaStore and SAF destinations.
+            try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+                if (pfd == null) return 0;
+                long size = pfd.getStatSize();
+                return size > 0 ? size : 0;
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to query existing size", e);
