@@ -23,6 +23,7 @@
         android:textSize="16sp" />
 
     <TextView
+        android:id="@+id/prefer_app_folder_summary"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
@@ -53,6 +54,7 @@
         android:textSize="16sp" />
 
     <TextView
+        android:id="@+id/use_custom_folder_summary"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"

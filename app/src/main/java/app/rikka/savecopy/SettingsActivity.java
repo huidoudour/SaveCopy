@@ -39,6 +39,15 @@ public class SettingsActivity extends ComponentActivity {
             boolean preferAppFolder = sharedPreferences.getBoolean(Settings.KEY_PREFER_APP_FOLDER, false);
             boolean useCustomFolder = sharedPreferences.getBoolean(Settings.KEY_USE_CUSTOM_FOLDER, false);
             String savedPath = sharedPreferences.getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
+
+            // Older versions allowed both values to be saved. Keep the more
+            // specific custom-folder choice and repair that state on entry.
+            if (preferAppFolder && useCustomFolder) {
+                preferAppFolder = false;
+                sharedPreferences.edit()
+                        .putBoolean(Settings.KEY_PREFER_APP_FOLDER, false)
+                        .apply();
+            }
             Log.d(TAG, "Loaded settings: preferAppFolder=" + preferAppFolder
                     + ", useCustomFolder=" + useCustomFolder
                     + ", customFolderPath=" + savedPath);
@@ -53,6 +62,7 @@ public class SettingsActivity extends ComponentActivity {
                     Log.d(TAG, "unchecking useCustomFolder due to preferAppFolder");
                     binding.useCustomFolder.setChecked(false);
                 }
+                updateMutuallyExclusivePreferenceState();
             });
 
             // Setup custom folder switch
@@ -66,6 +76,7 @@ public class SettingsActivity extends ComponentActivity {
                     Log.d(TAG, "unchecking preferAppFolder due to useCustomFolder");
                     binding.preferAppFolder.setChecked(false);
                 }
+                updateMutuallyExclusivePreferenceState();
             });
 
             // Register back-pressed dispatcher
@@ -90,6 +101,7 @@ public class SettingsActivity extends ComponentActivity {
             // Update UI
             updateFolderPathUI(savedPath);
             updateCustomFolderVisibility(useCustomFolder);
+            updateMutuallyExclusivePreferenceState();
             Log.d(TAG, "onCreate end");
         } catch (Throwable t) {
             Log.e(TAG, "onCreate crashed", t);
@@ -100,6 +112,27 @@ public class SettingsActivity extends ComponentActivity {
     private void updateCustomFolderVisibility(boolean visible) {
         Log.d(TAG, "updateCustomFolderVisibility: " + visible);
         binding.customFolderPathContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * The app-folder and custom-folder destinations are alternatives. Disable
+     * the opposite choice (and dim its summary) while either one is enabled,
+     * so the current selection is unambiguous at a glance.
+     */
+    private void updateMutuallyExclusivePreferenceState() {
+        boolean preferAppFolder = binding.preferAppFolder.isChecked();
+        boolean useCustomFolder = binding.useCustomFolder.isChecked();
+
+        boolean preferAppFolderEnabled = !useCustomFolder;
+        boolean useCustomFolderEnabled = !preferAppFolder;
+
+        binding.preferAppFolder.setEnabled(preferAppFolderEnabled);
+        binding.preferAppFolderSummary.setEnabled(preferAppFolderEnabled);
+        binding.preferAppFolderSummary.setAlpha(preferAppFolderEnabled ? 1f : 0.38f);
+
+        binding.useCustomFolder.setEnabled(useCustomFolderEnabled);
+        binding.useCustomFolderSummary.setEnabled(useCustomFolderEnabled);
+        binding.useCustomFolderSummary.setAlpha(useCustomFolderEnabled ? 1f : 0.38f);
     }
 
     private void updateFolderPathUI(String path) {

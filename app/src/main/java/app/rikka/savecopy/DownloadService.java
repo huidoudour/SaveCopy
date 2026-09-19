@@ -15,6 +15,8 @@ import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.database.Cursor;
+import android.net.ConnectivityManager;
+import android.net.ProxyInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -34,6 +36,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.URL;
@@ -155,12 +159,6 @@ public class DownloadService extends Service {
 
     @SuppressLint("NewApi")
     private Notification.Builder createProgressBuilder(String url) {
-        Intent notificationIntent = new Intent(this, InfoActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this, 0, notificationIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
         // Cancel action
         Intent cancelIntent = new Intent(this, DownloadService.class);
         cancelIntent.setAction(ACTION_CANCEL);
@@ -180,7 +178,6 @@ public class DownloadService extends Service {
                 .setContentTitle(getString(R.string.notification_working_title))
                 .setContentText(getString(R.string.toast_start_download, truncateUrl(url)))
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel,
@@ -618,7 +615,14 @@ public class DownloadService extends Service {
     }
 
     private HttpURLConnection openHttpConnection(URL url, long startByte) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        Proxy systemProxy = getSystemHttpProxy();
+        HttpURLConnection connection;
+        if (systemProxy != null) {
+            Log.d(TAG, "Using system HTTP proxy: " + systemProxy.address());
+            connection = (HttpURLConnection) url.openConnection(systemProxy);
+        } else {
+            connection = (HttpURLConnection) url.openConnection();
+        }
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(CONNECT_TIMEOUT);
         connection.setReadTimeout(READ_TIMEOUT);
@@ -628,6 +632,34 @@ public class DownloadService extends Service {
             connection.setRequestProperty("Range", "bytes=" + startByte + "-");
         }
         return connection;
+    }
+
+    /**
+     * Returns the current default-network HTTP proxy. PAC proxies are deliberately
+     * left to Android's default URL connection handling, which can evaluate the
+     * PAC rules for the requested host instead of treating the PAC URL as a proxy.
+     */
+    private Proxy getSystemHttpProxy() {
+        try {
+            ConnectivityManager connectivityManager =
+                    (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            ProxyInfo proxyInfo = connectivityManager != null
+                    ? connectivityManager.getDefaultProxy() : null;
+            if (proxyInfo == null || proxyInfo.getHost() == null || proxyInfo.getPort() <= 0) {
+                return null;
+            }
+            if (proxyInfo.getPacFileUrl() != null
+                    && !Uri.EMPTY.equals(proxyInfo.getPacFileUrl())) {
+                Log.d(TAG, "System PAC proxy detected; using Android proxy selection");
+                return null;
+            }
+            return new Proxy(Proxy.Type.HTTP,
+                    InetSocketAddress.createUnresolved(proxyInfo.getHost(), proxyInfo.getPort()));
+        } catch (SecurityException e) {
+            // A missing network-state permission must not prevent downloading.
+            Log.w(TAG, "Unable to read system proxy", e);
+            return null;
+        }
     }
 
     private long queryExistingSize(Uri uri) {
