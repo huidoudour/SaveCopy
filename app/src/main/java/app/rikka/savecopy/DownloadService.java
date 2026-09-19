@@ -5,6 +5,7 @@ import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -60,6 +61,7 @@ public class DownloadService extends Service {
     private static final int CONNECT_TIMEOUT = 20000;
     private static final int READ_TIMEOUT = 60000;
     private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
+    private static final String INSTALLER_PACKAGE = "io.github.huidoudour.Installer";
 
     public static final String EXTRA_DOWNLOAD_URL = "download_url";
     public static final String EXTRA_FILE_NAME = "file_name";
@@ -67,6 +69,7 @@ public class DownloadService extends Service {
     public static final String ACTION_CANCEL = "app.rikka.savecopy.DOWNLOAD_CANCEL";
 
     private static DownloadCallback sCallback;
+    private static volatile DownloadStatus sDownloadStatus;
 
     private NotificationManager notificationManager;
     private Notification.Builder progressBuilder;
@@ -83,6 +86,38 @@ public class DownloadService extends Service {
     private long downloadedSize;
     private long lastUpdateTime;
     private long lastUpdateBytes;
+    private String activeDownloadUrl;
+    private String activeDownloadFileName;
+    private long downloadSessionStartedAt;
+
+    public enum DownloadState {
+        DOWNLOADING, COMPLETED, FAILED, CANCELLED
+    }
+
+    /** Immutable snapshot consumed by the download-details dialog. */
+    public static final class DownloadStatus {
+        public final String url;
+        public final String fileName;
+        public final long downloadedBytes;
+        public final long totalBytes;
+        public final long startedAtMillis;
+        public final long updatedAtMillis;
+        public final DownloadState state;
+        public final String message;
+
+        private DownloadStatus(String url, String fileName, long downloadedBytes,
+                               long totalBytes, long startedAtMillis,
+                               long updatedAtMillis, DownloadState state, String message) {
+            this.url = url;
+            this.fileName = fileName;
+            this.downloadedBytes = downloadedBytes;
+            this.totalBytes = totalBytes;
+            this.startedAtMillis = startedAtMillis;
+            this.updatedAtMillis = updatedAtMillis;
+            this.state = state;
+            this.message = message;
+        }
+    }
 
     public interface DownloadCallback {
         void onDownloadComplete(String fileName, String error);
@@ -90,6 +125,10 @@ public class DownloadService extends Service {
 
     public static void setCallback(DownloadCallback callback) {
         sCallback = callback;
+    }
+
+    public static DownloadStatus getDownloadStatus() {
+        return sDownloadStatus;
     }
 
     @Override
@@ -109,6 +148,7 @@ public class DownloadService extends Service {
         if (ACTION_CANCEL.equals(intent.getAction())) {
             Log.d(TAG, "Download cancelled by user");
             cancelled = true;
+            publishDownloadStatus(DownloadState.CANCELLED, "cancelled");
             // 中断阻塞中的网络读写，让下载线程尽快退出并清理半成品
             if (downloadThread != null) downloadThread.interrupt();
             if (currentConnection != null) currentConnection.disconnect();
@@ -129,6 +169,13 @@ public class DownloadService extends Service {
             return START_NOT_STICKY;
         }
 
+        activeDownloadUrl = downloadUrl;
+        activeDownloadFileName = fileName;
+        downloadedSize = 0;
+        totalSize = -1;
+        downloadSessionStartedAt = System.currentTimeMillis();
+        publishDownloadStatus(DownloadState.DOWNLOADING, null);
+
         // Build initial progress notification
         progressBuilder = createProgressBuilder(downloadUrl);
         Log.d(TAG, "Starting foreground with notification");
@@ -143,9 +190,11 @@ public class DownloadService extends Service {
                 if (cancelled) {
                     // 用户主动取消：不弹错误通知
                     Log.d(TAG, "Download cancelled: " + e.getMessage());
+                    publishDownloadStatus(DownloadState.CANCELLED, "cancelled");
                     notifyCallback(null, "cancelled");
                 } else {
                     Log.e(TAG, "Download failed", e);
+                    publishDownloadStatus(DownloadState.FAILED, e.getMessage());
                     notifyCallback(null, e.getMessage());
                     showErrorNotification(e.getMessage());
                 }
@@ -159,6 +208,13 @@ public class DownloadService extends Service {
 
     @SuppressLint("NewApi")
     private Notification.Builder createProgressBuilder(String url) {
+        Intent detailsIntent = new Intent(this, DownloadDetailsActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent detailsPendingIntent = PendingIntent.getActivity(
+                this, 0, detailsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
         // Cancel action
         Intent cancelIntent = new Intent(this, DownloadService.class);
         cancelIntent.setAction(ACTION_CANCEL);
@@ -178,6 +234,7 @@ public class DownloadService extends Service {
                 .setContentTitle(getString(R.string.notification_working_title))
                 .setContentText(getString(R.string.toast_start_download, truncateUrl(url)))
                 .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentIntent(detailsPendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel,
@@ -432,6 +489,7 @@ public class DownloadService extends Service {
             // first speed calculation used epoch time and always appeared as 0.
             lastUpdateTime = System.currentTimeMillis();
             lastUpdateBytes = startByte;
+            publishDownloadStatus(DownloadState.DOWNLOADING, null);
 
             // Switch from the indeterminate "connecting" state to an exact
             // percentage as soon as HTTP has provided a total size. This also
@@ -455,6 +513,8 @@ public class DownloadService extends Service {
             }
 
             Log.d(TAG, "Downloading: " + fileName + " (size: " + totalSize + ", type: " + contentType + ")");
+            activeDownloadFileName = fileName;
+            publishDownloadStatus(DownloadState.DOWNLOADING, null);
 
             // --- 3. Create destination file once (reused across retries) ---
             if (destUri == null) {
@@ -532,6 +592,8 @@ public class DownloadService extends Service {
                 currentDestUri = destUri;
                 currentIsSaf = isSaf;
                 currentFileName = fileName;
+                activeDownloadFileName = fileName;
+                publishDownloadStatus(DownloadState.DOWNLOADING, null);
             }
 
             // --- 4. Stream HTTP directly to destination (resume if possible) ---
@@ -555,6 +617,7 @@ public class DownloadService extends Service {
                     if (cancelled) throw new IOException("Download cancelled");
                     destOut.write(buf, 0, n);
                     downloadedSize += n;
+                    publishDownloadStatus(DownloadState.DOWNLOADING, null);
                     updateProgressNotification(downloadedSize, totalSize);
                 }
                 destOut.flush();
@@ -590,6 +653,8 @@ public class DownloadService extends Service {
             final Uri finalUri = destUri;
 
             Log.d(TAG, "Download complete: " + fn);
+            publishDownloadStatus(DownloadState.COMPLETED, null);
+            launchInstallerForApk(fn, finalUri);
             if (notificationManager != null) {
                 notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, finalUri));
             }
@@ -632,6 +697,44 @@ public class DownloadService extends Service {
             connection.setRequestProperty("Range", "bytes=" + startByte + "-");
         }
         return connection;
+    }
+
+    private void publishDownloadStatus(DownloadState state, String message) {
+        sDownloadStatus = new DownloadStatus(
+                activeDownloadUrl,
+                activeDownloadFileName,
+                downloadedSize,
+                totalSize,
+                downloadSessionStartedAt,
+                System.currentTimeMillis(),
+                state,
+                message
+        );
+    }
+
+    /** Opens only the user's preferred installer; no fallback installer is used. */
+    private void launchInstallerForApk(String fileName, Uri fileUri) {
+        if (fileName == null || !fileName.toLowerCase(Locale.ROOT).endsWith(".apk")
+                || fileUri == null) {
+            return;
+        }
+
+        Intent installIntent = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(fileUri, "application/vnd.android.package-archive")
+                .setPackage(INSTALLER_PACKAGE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            // Check both that the package exists and that it can handle APK VIEW intents.
+            getPackageManager().getPackageInfo(INSTALLER_PACKAGE, 0);
+            if (installIntent.resolveActivity(getPackageManager()) == null) {
+                Log.d(TAG, "Preferred installer cannot handle APK VIEW intents");
+                return;
+            }
+            startActivity(installIntent);
+        } catch (PackageManager.NameNotFoundException | ActivityNotFoundException | SecurityException e) {
+            // The requested installer is optional. Do not fall back to another app.
+            Log.d(TAG, "Preferred installer is unavailable", e);
+        }
     }
 
     /**

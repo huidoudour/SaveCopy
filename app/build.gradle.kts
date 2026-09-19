@@ -1,7 +1,34 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     alias(libs.plugins.android.application)
 }
 
+val baseVersionCode = 10
+val baseVersionName = "26"
+val backVersionCode = 20
+
+fun Project.gitCommitCount(): Int = try {
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toInt()
+} catch (_: Exception) { backVersionCode }
+
+fun Project.gitHash(): String = try {
+    providers.exec { commandLine("git", "rev-parse", "--short=7", "HEAD") }
+        .standardOutput.asText.get().trim()
+} catch (_: Exception) {
+    SimpleDateFormat("MMddHHmm").format(Date())
+}
+
+val appVersionCode = baseVersionCode + gitCommitCount()
+val appVersionName = "${baseVersionName}.${baseVersionCode+gitCommitCount()}.${gitHash()}-β"
+
+tasks.matching { it.name.startsWith("assemble") || it.name.startsWith("bundle") }.configureEach {
+    doLast {
+        println(">>> CopySave-[$name]: $appVersionName($appVersionCode) <<<")
+    }
+}
 android {
     namespace = "app.rikka.savecopy"
     compileSdk {
@@ -15,8 +42,8 @@ android {
         minSdk = 29
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 18
-        versionName = "26.18.0713-β"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -2,6 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <permission
+        android:name="me.huidoudour.copysave.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="me.huidoudour.copysave.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE"
         tools:ignore="ForegroundServicesPolicy" />
@@ -20,6 +26,7 @@
         android:name="android.permission.INTERNET" />
 
     <queries>
+        <package android:name="io.github.huidoudour.Installer" />
         <!-- Used to check if SaveCopy is the only one to open the file -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -125,6 +132,12 @@
             android:exported="false"
             android:noHistory="true"
             android:theme="@style/AppTheme.NoDisplay" />
+        <activity
+            android:name=".DownloadDetailsActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/AppTheme.Dialog.Alert"
+            android:label="@string/download_details_title" />
 
         <service
             android:name=".SaveService"
