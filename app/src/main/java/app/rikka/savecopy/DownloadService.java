@@ -5,7 +5,6 @@ import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -296,10 +295,7 @@ public class DownloadService extends Service {
     private Notification createSuccessNotification(String fileName, Uri fileUri) {
         Intent notificationIntent;
         if (fileUri != null) {
-            notificationIntent = new Intent(Intent.ACTION_VIEW);
-            String mimeType = FileUtils.getMimeTypeForFileName(fileName);
-            notificationIntent.setDataAndType(fileUri, mimeType != null ? mimeType : "*/*");
-            notificationIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            notificationIntent = buildOpenFileIntent(fileName, fileUri);
         } else {
             // 兜底：打开 app 主界面
             notificationIntent = new Intent(this, InfoActivity.class);
@@ -327,7 +323,7 @@ public class DownloadService extends Service {
 
         return builder
                 .setContentTitle(getString(R.string.notification_saved_title, "download"))
-                .setContentText(getString(R.string.toast_saved, fileName))
+                .setContentText(getString(R.string.notification_saved_open_hint, fileName))
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
@@ -654,7 +650,7 @@ public class DownloadService extends Service {
 
             Log.d(TAG, "Download complete: " + fn);
             publishDownloadStatus(DownloadState.COMPLETED, null);
-            launchInstallerForApk(fn, finalUri);
+            // 不自动打开已下载的文件，改由用户在结果通知中手动点击打开
             if (notificationManager != null) {
                 notificationManager.notify(NOTIFICATION_ID + 1, createSuccessNotification(fn, finalUri));
             }
@@ -712,29 +708,38 @@ public class DownloadService extends Service {
         );
     }
 
-    /** Opens only the user's preferred installer; no fallback installer is used. */
-    private void launchInstallerForApk(String fileName, Uri fileUri) {
-        if (fileName == null || !fileName.toLowerCase(Locale.ROOT).endsWith(".apk")
-                || fileUri == null) {
-            return;
+    /**
+     * Builds the intent used when the user taps the completed-download notification.
+     * APKs are handed to the user's preferred installer when it is available;
+     * every other file falls back to a generic viewer.
+     */
+    private Intent buildOpenFileIntent(String fileName, Uri fileUri) {
+        if (isApk(fileName)) {
+            Intent installIntent = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(fileUri, "application/vnd.android.package-archive")
+                    .setPackage(INSTALLER_PACKAGE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                // Check both that the package exists and that it can handle APK VIEW intents.
+                getPackageManager().getPackageInfo(INSTALLER_PACKAGE, 0);
+                if (installIntent.resolveActivity(getPackageManager()) != null) {
+                    return installIntent;
+                }
+                Log.d(TAG, "Preferred installer cannot handle APK VIEW intents");
+            } catch (PackageManager.NameNotFoundException | SecurityException e) {
+                Log.d(TAG, "Preferred installer is unavailable", e);
+            }
         }
 
-        Intent installIntent = new Intent(Intent.ACTION_VIEW)
-                .setDataAndType(fileUri, "application/vnd.android.package-archive")
-                .setPackage(INSTALLER_PACKAGE)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            // Check both that the package exists and that it can handle APK VIEW intents.
-            getPackageManager().getPackageInfo(INSTALLER_PACKAGE, 0);
-            if (installIntent.resolveActivity(getPackageManager()) == null) {
-                Log.d(TAG, "Preferred installer cannot handle APK VIEW intents");
-                return;
-            }
-            startActivity(installIntent);
-        } catch (PackageManager.NameNotFoundException | ActivityNotFoundException | SecurityException e) {
-            // The requested installer is optional. Do not fall back to another app.
-            Log.d(TAG, "Preferred installer is unavailable", e);
-        }
+        Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+        String mimeType = FileUtils.getMimeTypeForFileName(fileName);
+        viewIntent.setDataAndType(fileUri, mimeType != null ? mimeType : "*/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return viewIntent;
+    }
+
+    private static boolean isApk(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".apk");
     }
 
     /**

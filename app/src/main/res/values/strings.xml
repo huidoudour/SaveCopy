@@ -23,6 +23,7 @@
     <string name="notification_saving_title">Saving copy of %s</string>
     <string name="notification_saved_title">Saved copy for %1$s</string>
     <string name="notification_saved_text">The copy is located at %1$s</string>
+    <string name="notification_saved_open_hint">Saved: %1$s · Tap to open</string>
     <string name="toast_saved">Saved: %s to Download</string>
     <string name="toast_invalid_uri">Invalid download link</string>
     <string name="toast_start_download">Start downloading: %s</string>
