@@ -24,24 +24,26 @@ fun Project.gitHash(): String = try {
 val appVersionCode = baseVersionCode + gitCommitCount()
 val appVersionName = "${baseVersionName}.${baseVersionCode+gitCommitCount()}.${gitHash()}-β"
 
+val versionLine = "$appVersionName($appVersionCode)"
+
 tasks.matching { it.name.startsWith("assemble") || it.name.startsWith("bundle") }.configureEach {
+    inputs.property("versionLine", versionLine)
     doLast {
-        println(">>> CopySave-[$name]: $appVersionName($appVersionCode) <<<")
+        println(">>> CopySave-[$name]: ${inputs.properties["versionLine"]} <<<")
     }
 }
 android {
     namespace = "app.rikka.savecopy"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
+        version = release(37) {
+            minorApiLevel = 2
         }
     }
 
     defaultConfig {
         applicationId = "me.huidoudour.copysave"
         minSdk = 29
-        //noinspection OldTargetApi
-        targetSdk = 36
+        targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
 
