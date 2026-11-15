@@ -6,7 +6,9 @@
     <string name="notification_channel_progress">Progress</string>
     <string name="notification_channel_result">Result</string>
     <string name="notification_working_title">Working…</string>
+    <string name="notification_active_downloads">%1$d download(s) in progress</string>
     <string name="download_details_title">Download details</string>
+    <string name="download_details_install">Install</string>
     <string name="download_details_status_downloading">Downloading</string>
     <string name="download_details_status_completed">Download completed</string>
     <string name="download_details_status_failed">Download failed</string>

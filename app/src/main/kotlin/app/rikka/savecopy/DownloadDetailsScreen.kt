@@ -1,9 +1,13 @@
 package app.rikka.savecopy
 
-import androidx.compose.foundation.layout.Box
+import android.content.Intent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,15 +35,18 @@ private const val REFRESH_INTERVAL_MS = 250L
  * padded status/file/size rows and the end-aligned platform OK button.
  */
 @Composable
-fun DownloadDetailsScreen(onClose: () -> Unit) {
+fun DownloadDetailsScreen(session: Int, onClose: () -> Unit) {
     val theme = rememberPlatformTheme()
-    var status by remember { mutableStateOf(DownloadService.getDownloadStatus()) }
+    val context = LocalContext.current
+    var status by remember(session) {
+        mutableStateOf(DownloadService.getDownloadStatus(session))
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
-    LaunchedEffect(lifecycle) {
+    LaunchedEffect(lifecycle, session) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
-                val current = DownloadService.getDownloadStatus()
+                val current = DownloadService.getDownloadStatus(session)
                 status = current
                 if (current == null || current.state != DownloadService.DownloadState.DOWNLOADING) {
                     break
@@ -151,12 +159,38 @@ fun DownloadDetailsScreen(onClose: () -> Unit) {
             )
         }
 
-        Box(
+        val installable = snapshot?.takeIf {
+            it.state == DownloadService.DownloadState.COMPLETED && it.fileUri != null
+        }
+
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(end = theme.dialogPreferredPadding),
-            contentAlignment = Alignment.CenterEnd,
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (installable != null &&
+                FileUtils.isInstallerPackageFile(installable.fileName)
+            ) {
+                PlatformButton(
+                    text = stringResource(R.string.download_details_install),
+                    onClick = {
+                        installable.fileUri?.let { uri ->
+                            context.startActivity(
+                                Intent(context, OpenFileActivity::class.java)
+                                    .setAction(OpenFileActivity.ACTION_OPEN_DOWNLOAD)
+                                    .setData(uri)
+                                    .putExtra(
+                                        OpenFileActivity.EXTRA_FILE_NAME,
+                                        installable.fileName ?: "",
+                                    ),
+                            )
+                        }
+                    },
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
             PlatformButton(
                 text = stringResource(android.R.string.ok),
                 onClick = onClose,

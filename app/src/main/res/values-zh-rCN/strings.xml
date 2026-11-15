@@ -6,7 +6,9 @@
     <string name="notification_channel_progress">进度</string>
     <string name="notification_channel_result">结果</string>
     <string name="notification_working_title">正在工作中…</string>
+    <string name="notification_active_downloads">%1$d 个下载任务进行中</string>
     <string name="download_details_title">下载详情</string>
+    <string name="download_details_install">安装</string>
     <string name="download_details_status_downloading">正在下载</string>
     <string name="download_details_status_completed">下载完成</string>
     <string name="download_details_status_failed">下载失败</string>

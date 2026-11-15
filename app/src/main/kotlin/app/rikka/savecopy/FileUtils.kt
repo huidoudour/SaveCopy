@@ -11,6 +11,12 @@ object FileUtils {
     /** Extensions a package installer can consume. */
     private val INSTALLER_EXTENSIONS = arrayOf(".apk", ".apks", ".xapk", ".apkm")
 
+    /** MediaStore appends " (1)", " (2)"… without keeping the extension last. */
+    private val MEDIASTORE_COLLISION_SUFFIX = Regex("\\s*\\(\\d+\\)$")
+
+    private fun normalizedName(fileName: String): String =
+        fileName.replace(MEDIASTORE_COLLISION_SUFFIX, "")
+
     fun splitFileName(filename: String): Array<String> {
         val index = filename.lastIndexOf('.')
         return if (index > 0) {
@@ -23,10 +29,11 @@ object FileUtils {
     fun getMimeTypeForFileName(fileName: String?): String {
         if (fileName == null) return MIME_OCTET_STREAM
 
-        var extension = MimeTypeMap.getFileExtensionFromUrl(fileName) ?: ""
+        val normalized = normalizedName(fileName)
+        var extension = MimeTypeMap.getFileExtensionFromUrl(normalized) ?: ""
         if (extension.isEmpty()) {
-            val dot = fileName.lastIndexOf('.')
-            if (dot > 0) extension = fileName.substring(dot + 1)
+            val dot = normalized.lastIndexOf('.')
+            if (dot > 0) extension = normalized.substring(dot + 1)
         }
         if (extension.isEmpty()) return MIME_OCTET_STREAM
 
@@ -42,7 +49,7 @@ object FileUtils {
     /** True when the name looks like something the package installer can open. */
     fun isInstallerPackageFile(fileName: String?): Boolean {
         if (fileName == null) return false
-        val lower = fileName.lowercase(Locale.ROOT)
+        val lower = normalizedName(fileName).lowercase(Locale.ROOT)
         return INSTALLER_EXTENSIONS.any(lower::endsWith)
     }
 

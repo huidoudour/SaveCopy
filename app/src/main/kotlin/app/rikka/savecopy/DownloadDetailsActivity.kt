@@ -10,8 +10,9 @@ class DownloadDetailsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTitle(R.string.download_details_title)
+        val session = intent?.getIntExtra(DownloadService.EXTRA_SESSION, -1) ?: -1
         setContent {
-            DownloadDetailsScreen(onClose = ::finish)
+            DownloadDetailsScreen(session = session, onClose = ::finish)
         }
     }
 }

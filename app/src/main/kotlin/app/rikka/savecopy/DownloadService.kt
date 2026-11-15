@@ -9,6 +9,7 @@ import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -40,6 +41,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.UnknownHostException
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -57,6 +59,7 @@ class DownloadService : Service() {
 
     /** Immutable snapshot consumed by the download-details dialog. */
     data class DownloadStatus(
+        val session: Int,
         val url: String,
         val fileName: String?,
         val downloadedBytes: Long,
@@ -70,76 +73,85 @@ class DownloadService : Service() {
     )
 
     private var notificationManager: NotificationManager? = null
-    private var progressBuilder: Notification.Builder? = null
+    private lateinit var sessionPreferences: SharedPreferences
 
     private val sessionCounter = AtomicInteger()
+    private val tasks = ConcurrentHashMap<Int, DownloadTask>()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** Session id allowed to keep running; anything else must stop. */
+    /** True while the service holds the summary foreground notification. */
     @Volatile
-    private var activeSession = -1
-
-    @Volatile
-    private var activeTask: DownloadTask? = null
+    private var isForeground = false
 
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?
+        sessionPreferences = getSharedPreferences(SESSION_PREFERENCES, MODE_PRIVATE)
+        sessionCounter.set(sessionPreferences.getInt(KEY_LAST_SESSION, 0))
         ensureNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
-            stopSelf()
+            if (tasks.isEmpty()) stopSelf()
             return START_NOT_STICKY
         }
 
         if (ACTION_CANCEL == intent.action) {
-            Log.d(TAG, "Download cancelled by user")
-            cancelActiveSession()
+            val session = intent.getIntExtra(EXTRA_SESSION, -1)
+            Log.d(TAG, "Download cancelled by user, session=$session")
+            cancelTask(session)
             return START_NOT_STICKY
         }
 
         val downloadUrl = intent.getStringExtra(EXTRA_DOWNLOAD_URL)
         if (downloadUrl.isNullOrEmpty()) {
             Log.w(TAG, "Download started without a URL")
-            stopSelf()
+            if (tasks.isEmpty()) stopSelf()
             return START_NOT_STICKY
         }
 
-        // A new request always wins: the previous transfer loses its session id
-        // and cleans up after itself.
-        abortActiveSession()
-
         val session = sessionCounter.incrementAndGet()
-        activeSession = session
-
+        sessionPreferences.edit().putInt(KEY_LAST_SESSION, session).apply()
         val task = DownloadTask(
             session = session,
-            startId = startId,
             url = downloadUrl,
             suggestedFileName = intent.getStringExtra(EXTRA_FILE_NAME),
             callingPackage = intent.getStringExtra(EXTRA_CALLING_PACKAGE),
         )
-        activeTask = task
+        tasks[session] = task
         publishStatus(task, DownloadState.DOWNLOADING, null, null)
+        Log.d(TAG, "Started download session $session, active=${tasks.size}")
 
-        val builder = createProgressBuilder(downloadUrl)
-        progressBuilder = builder
         try {
-            startForeground(
-                NOTIFICATION_ID_PROGRESS,
-                builder.build(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
+            if (!isForeground) {
+                // One summary notification keeps the service in the foreground;
+                // every task keeps its own notification below it.
+                startForeground(
+                    NOTIFICATION_ID_SUMMARY,
+                    buildSummaryNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+                isForeground = true
+            } else {
+                notificationManager?.notify(
+                    NOTIFICATION_ID_SUMMARY,
+                    buildSummaryNotification(),
+                )
+            }
         } catch (e: RuntimeException) {
             // Background start restrictions can reject the foreground promotion;
             // without a notification the transfer must not continue silently.
-            Log.e(TAG, "Unable to start foreground service", e)
-            activeSession = -1
-            showErrorNotification(e.message)
-            stopSelf()
+            Log.e(TAG, "Unable to start foreground service for session $session", e)
+            tasks.remove(session, task)
+            task.cancel()
+            showErrorNotification(task, e.message)
+            if (tasks.isEmpty()) {
+                stopSelf()
+            }
             return START_NOT_STICKY
         }
+        notificationManager?.notify(task.notificationId, task.buildProgressNotification())
 
         val worker = Thread(task, "download-$session")
         task.attachThread(worker)
@@ -147,25 +159,50 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Invalidates the running session so its task stops at the next check. */
-    private fun abortActiveSession() {
-        val task = activeTask
-        activeSession = -1
-        task?.cancel()
-        activeTask = null
-    }
-
-    private fun cancelActiveSession() {
-        val task = activeTask
-        activeSession = -1
-        if (task != null) {
+    /** Cancels one session, or every session when {@code session < 0}. */
+    private fun cancelTask(session: Int) {
+        val targets = if (session < 0) {
+            tasks.values.toList()
+        } else {
+            listOfNotNull(tasks[session])
+        }
+        for (task in targets) {
             task.cancel()
             publishStatus(task, DownloadState.CANCELLED, "cancelled", null)
+            tasks.remove(task.session, task)
+            notificationManager?.cancel(task.notificationId)
         }
-        activeTask = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        notificationManager?.cancel(NOTIFICATION_ID_PROGRESS)
-        stopSelf()
+        if (tasks.isEmpty()) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            notificationManager?.cancel(NOTIFICATION_ID_SUMMARY)
+            isForeground = false
+            stopSelf()
+        } else {
+            notificationManager?.notify(
+                NOTIFICATION_ID_SUMMARY,
+                buildSummaryNotification(),
+            )
+        }
+    }
+
+    private fun onTaskFinished(task: DownloadTask) {
+        tasks.remove(task.session, task)
+        notificationManager?.cancel(task.notificationId)
+        if (tasks.isEmpty()) {
+            mainHandler.post {
+                if (tasks.isEmpty()) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    notificationManager?.cancel(NOTIFICATION_ID_SUMMARY)
+                    isForeground = false
+                    stopSelf()
+                }
+            }
+        } else {
+            notificationManager?.notify(
+                NOTIFICATION_ID_SUMMARY,
+                buildSummaryNotification(),
+            )
+        }
     }
 
     private fun publishStatus(
@@ -174,7 +211,8 @@ class DownloadService : Service() {
         message: String?,
         fileUri: Uri?,
     ) {
-        downloadStatus = DownloadStatus(
+        statuses[task.session] = DownloadStatus(
+            session = task.session,
             url = task.url,
             fileName = task.fileName,
             downloadedBytes = task.downloadedSize,
@@ -212,54 +250,47 @@ class DownloadService : Service() {
         return builder
     }
 
-    private fun createDetailsPendingIntent(): PendingIntent {
+    private fun buildSummaryNotification(): Notification =
+        newReplyBuilder()
+            .setContentTitle(getString(R.string.notification_working_title))
+            .setContentText(
+                getString(R.string.notification_active_downloads, tasks.size),
+            )
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setGroup(GROUP_KEY)
+            .setGroupSummary(true)
+            .setProgress(0, 0, true)
+            .build()
+
+    private fun createDetailsPendingIntent(session: Int): PendingIntent {
         val intent = Intent(this, DownloadDetailsActivity::class.java)
+            .putExtra(EXTRA_SESSION, session)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(
             this,
-            REQUEST_DETAILS,
+            REQUEST_DETAILS_BASE + session,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
 
-    private fun createProgressBuilder(url: String): Notification.Builder {
-        val cancelIntent = Intent(this, DownloadService::class.java).setAction(ACTION_CANCEL)
-        val cancelPendingIntent = PendingIntent.getService(
+    private fun createCancelPendingIntent(session: Int): PendingIntent {
+        val intent = Intent(this, DownloadService::class.java)
+            .setAction(ACTION_CANCEL)
+            .putExtra(EXTRA_SESSION, session)
+        return PendingIntent.getService(
             this,
-            REQUEST_CANCEL,
-            cancelIntent,
+            REQUEST_CANCEL_BASE + session,
+            intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-
-        val cancelIcon = Icon.createWithResource(
-            this,
-            android.R.drawable.ic_menu_close_clear_cancel,
-        )
-
-        // Tapping the download notification opens the details dialog; cancelling
-        // stays an explicit action. The failure notification is the only one
-        // whose body does not open the app.
-        return newReplyBuilder()
-            .setContentTitle(getString(R.string.notification_working_title))
-            .setContentText(getString(R.string.toast_start_download, truncateUrl(url)))
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentIntent(createDetailsPendingIntent())
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .addAction(
-                Notification.Action.Builder(
-                    cancelIcon,
-                    getString(android.R.string.cancel),
-                    cancelPendingIntent,
-                ).build(),
-            )
-            .setProgress(100, 0, true)
     }
 
     /**
-     * Tapping the finished notification opens the details dialog; the "Open
-     * file" action is an explicit way to hand the file to another app.
+     * The finished notification opens the file (installer for APKs, the normal
+     * viewer otherwise); a separate action opens this session's details.
      */
     private fun showResultNotification(task: DownloadTask, fileUri: Uri?) {
         val manager = notificationManager ?: return
@@ -271,11 +302,12 @@ class DownloadService : Service() {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val openPendingIntent = PendingIntent.getActivity(
             this,
-            REQUEST_OPEN,
+            REQUEST_OPEN_BASE + task.session,
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val openIcon = Icon.createWithResource(this, R.drawable.ic_notification_open_24)
+        val detailsIcon = Icon.createWithResource(this, android.R.drawable.ic_menu_info_details)
+        val homeIcon = Icon.createWithResource(this, android.R.drawable.ic_menu_set_as)
 
         val container = task.folderName ?: getString(R.string.app_name)
         val notification = newReplyBuilder()
@@ -284,29 +316,47 @@ class DownloadService : Service() {
                 getString(R.string.notification_saved_text, task.fileName ?: ""),
             )
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentIntent(createDetailsPendingIntent())
+            .setContentIntent(openPendingIntent)
             .addAction(
                 Notification.Action.Builder(
-                    openIcon,
+                    homeIcon,
                     getString(R.string.notification_action_open),
                     openPendingIntent,
                 ).build(),
             )
-            .setAutoCancel(true)
+            .addAction(
+                Notification.Action.Builder(
+                    detailsIcon,
+                    getString(R.string.download_details_title),
+                    createDetailsPendingIntent(task.session),
+                ).build(),
+            )
+            // Keep the finished notification until the user swipes it away.
+            // It is deliberately outside the progress group: removing the group
+            // summary at completion must not take the result with it.
+            .setAutoCancel(false)
             .build()
 
-        manager.notify(NOTIFICATION_ID_RESULT, notification)
+        manager.notify(NOTIFICATION_ID_RESULT_BASE + task.session, notification)
     }
 
-    private fun showErrorNotification(error: String?) {
+    private fun showErrorNotification(task: DownloadTask, error: String?) {
         val manager = notificationManager ?: return
+        val detailsIcon = Icon.createWithResource(this, android.R.drawable.ic_menu_info_details)
         val notification = newReplyBuilder()
             .setContentTitle(getString(R.string.notification_error_title))
             .setContentText(error ?: getString(R.string.notification_error_text))
             .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .addAction(
+                Notification.Action.Builder(
+                    detailsIcon,
+                    getString(R.string.download_details_title),
+                    createDetailsPendingIntent(task.session),
+                ).build(),
+            )
             .setAutoCancel(true)
             .build()
-        manager.notify(NOTIFICATION_ID_ERROR, notification)
+        manager.notify(NOTIFICATION_ID_ERROR_BASE + task.session, notification)
     }
 
     private fun updateProgressNotification(
@@ -315,7 +365,6 @@ class DownloadService : Service() {
         total: Long,
         force: Boolean,
     ) {
-        val builder = progressBuilder ?: return
         val manager = notificationManager ?: return
 
         val now = System.currentTimeMillis()
@@ -327,28 +376,11 @@ class DownloadService : Service() {
 
         val bytesSinceLast = current - task.lastUpdateBytes
         val timeSinceLast = (now - task.lastUpdateTime).coerceAtLeast(1)
-        val speedBps = bytesSinceLast.toDouble() * 1000 / timeSinceLast
-
+        task.lastSpeedBps = bytesSinceLast.toDouble() * 1000 / timeSinceLast
         task.lastUpdateTime = now
         task.lastUpdateBytes = current
 
-        val text = StringBuilder()
-        text.append("↓ ").append(FormatUtils.speed(speedBps))
-        text.append("  ").append(FormatUtils.size(current))
-        if (total > 0) {
-            text.append("/").append(FormatUtils.size(total))
-            val percent = ((current * 100) / total).coerceAtMost(100L).toInt()
-            builder.setProgress(100, percent, false)
-            val remaining = total - current
-            if (speedBps > 0 && remaining > 0) {
-                text.append("  ").append(FormatUtils.eta((remaining / speedBps).toLong()))
-            }
-        } else {
-            builder.setProgress(0, 0, true)
-        }
-
-        builder.setContentText(text.toString())
-        manager.notify(NOTIFICATION_ID_PROGRESS, builder.build())
+        manager.notify(task.notificationId, task.buildProgressNotification())
     }
 
     // ---------------------------------------------------------------- downloading
@@ -360,14 +392,13 @@ class DownloadService : Service() {
      */
     private inner class DownloadTask(
         val session: Int,
-        /** Identifies this start request so a stale task cannot stop a newer one. */
-        val startId: Int,
         val url: String,
         val suggestedFileName: String?,
         val callingPackage: String?,
     ) : Runnable {
 
         val startedAtMillis: Long = System.currentTimeMillis()
+        val notificationId: Int = NOTIFICATION_ID_TASK_BASE + session
 
         @Volatile
         private var cancelled = false
@@ -388,6 +419,7 @@ class DownloadService : Service() {
         var downloadedSize = 0L
         var lastUpdateTime = 0L
         var lastUpdateBytes = 0L
+        var lastSpeedBps = 0.0
 
         /** Set when the direct attempt failed and the system proxy is used. */
         private var usedProxy = false
@@ -396,7 +428,7 @@ class DownloadService : Service() {
             worker = thread
         }
 
-        fun isActive(): Boolean = !cancelled && activeSession == session
+        fun isActive(): Boolean = !cancelled && tasks[session] === this
 
         fun cancel() {
             cancelled = true
@@ -409,28 +441,76 @@ class DownloadService : Service() {
             worker?.interrupt()
         }
 
+        /** Builds this task's progress notification from its current state. */
+        fun buildProgressNotification(): Notification {
+            val cancelIcon = Icon.createWithResource(
+                this@DownloadService,
+                android.R.drawable.ic_menu_close_clear_cancel,
+            )
+            val builder = newReplyBuilder()
+                .setContentTitle(fileName ?: getString(R.string.notification_working_title))
+                .setContentText(progressText())
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentIntent(createDetailsPendingIntent(session))
+                .setGroup(GROUP_KEY)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .addAction(
+                    Notification.Action.Builder(
+                        cancelIcon,
+                        getString(android.R.string.cancel),
+                        createCancelPendingIntent(session),
+                    ).build(),
+                )
+            if (totalSize > 0) {
+                val percent = ((downloadedSize * 100) / totalSize)
+                    .coerceIn(0L, 100L)
+                    .toInt()
+                builder.setProgress(100, percent, false)
+            } else {
+                builder.setProgress(0, 0, true)
+            }
+            return builder.build()
+        }
+
+        private fun progressText(): String {
+            if (downloadedSize <= 0 && totalSize <= 0) {
+                return getString(R.string.toast_start_download, truncateUrl(url))
+            }
+            val text = StringBuilder()
+            if (lastSpeedBps > 0) {
+                text.append("↓ ").append(FormatUtils.speed(lastSpeedBps)).append("  ")
+            }
+            text.append(FormatUtils.size(downloadedSize))
+            if (totalSize > 0) {
+                text.append("/").append(FormatUtils.size(totalSize))
+                if (lastSpeedBps > 0) {
+                    val remaining = totalSize - downloadedSize
+                    if (remaining > 0) {
+                        text.append("  ")
+                            .append(FormatUtils.eta((remaining / lastSpeedBps).toLong()))
+                    }
+                }
+            }
+            return text.toString()
+        }
+
         override fun run() {
             try {
                 download()
             } catch (e: Exception) {
                 if (cancelled || !isActive()) {
-                    // The cancel action (or a newer request) already published the
-                    // status for this session; do not overwrite it.
+                    // The cancel action already published the status for this
+                    // session; do not overwrite it.
                     Log.d(TAG, "Download stopped: ${e.message}")
                 } else {
                     Log.e(TAG, "Download failed", e)
                     publishStatus(this, DownloadState.FAILED, e.message, null)
-                    showErrorNotification(e.message)
+                    showErrorNotification(this, e.message)
                 }
             } finally {
                 connection = null
-                if (this === activeTask) {
-                    activeTask = null
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                }
-                // stopSelf(startId) keeps the service alive when a newer
-                // download already owns it.
-                stopSelf(startId)
+                onTaskFinished(this)
             }
         }
 
@@ -1044,16 +1124,20 @@ class DownloadService : Service() {
     companion object {
         private const val TAG = "DownloadService"
 
-        private const val NOTIFICATION_ID_PROGRESS = 1001
-        private const val NOTIFICATION_ID_RESULT = 1002
-        private const val NOTIFICATION_ID_ERROR = 1003
+        private const val NOTIFICATION_ID_SUMMARY = 1000
+        private const val NOTIFICATION_ID_TASK_BASE = 2000
+        private const val NOTIFICATION_ID_RESULT_BASE = 3000
+        private const val NOTIFICATION_ID_ERROR_BASE = 4000
+        private const val GROUP_KEY = "app.rikka.savecopy.downloads"
 
-        private const val REQUEST_DETAILS = 100
-        private const val REQUEST_CANCEL = 101
-        private const val REQUEST_OPEN = 102
+        private const val REQUEST_DETAILS_BASE = 100
+        private const val REQUEST_CANCEL_BASE = 10_000
+        private const val REQUEST_OPEN_BASE = 20_000
 
         private const val BUFFER_SIZE = 64 * 1024
         private const val CHANNEL_ID = "download_channel"
+        private const val SESSION_PREFERENCES = "download_sessions"
+        private const val KEY_LAST_SESSION = "last_session"
         private const val MAX_RETRIES = 3
 
         /** Four refreshes per second keeps the notification responsive. */
@@ -1074,11 +1158,21 @@ class DownloadService : Service() {
         const val EXTRA_DOWNLOAD_URL = "download_url"
         const val EXTRA_FILE_NAME = "file_name"
         const val EXTRA_CALLING_PACKAGE = "calling_package"
+        const val EXTRA_SESSION = "session"
         const val ACTION_CANCEL = "app.rikka.savecopy.DOWNLOAD_CANCEL"
 
-        @Volatile
-        private var downloadStatus: DownloadStatus? = null
+        /** Status of every download started in this process, keyed by session. */
+        private val statuses = ConcurrentHashMap<Int, DownloadStatus>()
 
-        fun getDownloadStatus(): DownloadStatus? = downloadStatus
+        /**
+         * Returns the status for [session], or the most recently updated one
+         * when the session is unknown.
+         */
+        fun getDownloadStatus(session: Int = -1): DownloadStatus? =
+            if (session >= 0) {
+                statuses[session]
+            } else {
+                statuses.values.maxByOrNull { it.updatedAtMillis }
+            }
     }
 }
