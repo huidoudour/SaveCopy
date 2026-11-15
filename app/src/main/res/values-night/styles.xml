@@ -3,6 +3,4 @@
 
     <style name="AppTheme.Dialog.Alert" parent="Theme.Dialog.Alert" />
 
-    <style name="AppTheme.DialogAlert.AppCompat" parent="Theme.AppCompat.Dialog.Alert" />
-
 </resources>
