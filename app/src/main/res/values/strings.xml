@@ -48,6 +48,7 @@
     <string name="choose_action_title">Choose Action</string>
     <string name="error_http_url_not_supported">HTTP/HTTPS URLs cannot be saved directly. Please use the download function.</string>
     <string name="error_cannot_open_file">Cannot open file</string>
+    <string name="download_proxy_rejected">The system proxy rejected the download. Check the proxy/VPN rules or disable the proxy and retry.</string>
     <string name="settings_use_custom_folder">Use custom folder</string>
     <string name="settings_use_custom_folder_summary">Save files to a custom folder instead of Download.</string>
     <string name="settings_custom_folder_path">Custom folder path</string>

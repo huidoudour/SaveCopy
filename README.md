@@ -9,6 +9,7 @@
 - 添加操作选择对话框与标准保存副本入口
 - 添加下载副本功能
 - 支持自定义保存目录
+- 全量重构为 Kotlin + Jetpack Compose，原 `res/layout` XML 已移除；平台 `Switch`、`Button` 及带 `lineSpacingExtra` 的说明文字通过 `AndroidView` 保留系统原始样式，确保 UI 与旧版 XML 一致
 
 本项目（包括本仓库中的修改）以 **GNU GPL v3.0** 发布。完整许可证见 [LICENSE](LICENSE)，
 上游来源、基线版本及修改声明见 [NOTICE](NOTICE)。发布 APK 时，应同时提供与该 APK 对应版本的完整、可构建源代码。

@@ -48,6 +48,7 @@
     <string name="choose_action_title">选择操作</string>
     <string name="error_http_url_not_supported">无法直接保存 HTTP/HTTPS 链接。请使用下载功能。</string>
     <string name="error_cannot_open_file">无法打开文件</string>
+    <string name="download_proxy_rejected">系统代理拒绝了下载。请检查代理/VPN 规则，或关闭代理后重试。</string>
     <string name="settings_use_custom_folder">使用自定义文件夹</string>
     <string name="settings_use_custom_folder_summary">将文件保存到自定义文件夹而不是下载文件夹。</string>
     <string name="settings_custom_folder_path">自定义文件夹路径</string>
