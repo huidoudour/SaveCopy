@@ -1,0 +1,105 @@
+name: Android CI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'app/src/**'
+      - 'app/build.gradle.kts'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  # 先行检查：commit 是否已打 tag → 已打则跳过构建（避免与 Release Build 重复）
+  check-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 默认浅克隆不拉取 tags, 会导致 git tag --points-at 永远为空
+          fetch-tags: true
+      - id: check
+        run: |
+          if [ -n "$(git tag --points-at HEAD)" ]; then
+            echo "should-run=false" >> "$GITHUB_OUTPUT"
+            echo "Commit is tagged, skipping CI build"
+          else
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-release:
+    needs: check-tag
+    if: needs.check-tag.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Get short commit hash
+      id: short_hash
+      run: echo "hash=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+    - name: set up JDK 21
+      uses: actions/setup-java@v6
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Accept Android SDK Licenses
+      run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+
+    - name: Create release keystore file
+      run: |
+        echo "${{ secrets.SIGN_KEY_STORE_B64 }}" | base64 -d > sign_key
+        ls -lh sign_key
+        file sign_key
+
+    - name: Build Release APK
+      run: |
+        ./gradlew assembleRelease \
+          -Pandroid.injected.signing.store.file=$(pwd)/sign_key \
+          -Pandroid.injected.signing.store.password="${{ secrets.SIGN_KEY_STORE_PASSWD }}" \
+          -Pandroid.injected.signing.key.alias="${{ secrets.SIGN_KEY_ALIAS }}" \
+          -Pandroid.injected.signing.key.password="${{ secrets.SIGN_KEY_ALIAS_PASSWD }}" \
+          --stacktrace
+
+    - name: Verify APK signature
+      run: |
+        echo "APK build completed. Files in output directory:"
+        find build/app/outputs/apk/release -name "*.apk" -type f -exec ls -lh {} \;
+
+    - name: Read base version name
+      id: ver
+      run: |
+        version_name=$(jq -r '.elements[0].versionName' build/app/outputs/apk/release/output-metadata.json)
+        # versionName 形如 <基础版本名>.<提交数>.<hash>，去掉末尾两段即为基础版本名
+        base_version_name=${version_name%.*}
+        base_version_name=${base_version_name%.*}
+        echo "base_version_name=$base_version_name" >> "$GITHUB_OUTPUT"
+
+    - name: Verify APK output name
+      run: |
+        find build/app/outputs/apk/release -maxdepth 1 -name 'Installer-*.apk' -type f -exec ls -lh {} \;
+
+    - name: Upload release folder as artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: Installer-${{ steps.ver.outputs.base_version_name }}-${{ steps.short_hash.outputs.hash }}
+        # 上传 release 输出目录下的全部产物：APK、baselineProfiles 文件夹、output-metadata.json
+        path: build/app/outputs/apk/release/
+        if-no-files-found: error
+
+    - name: Clean up keystore
+      if: always()
+      run: rm -f sign_key
