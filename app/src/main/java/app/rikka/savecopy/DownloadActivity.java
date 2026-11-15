@@ -2,9 +2,7 @@ package app.rikka.savecopy;
 
 import android.Manifest;
 import android.app.AlertDialog;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.content.Context;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -15,10 +13,19 @@ import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Entry point for "download copy". Resolves the link carried by the incoming
+ * intent, checks the permissions the foreground service needs and hands the
+ * transfer over to {@link DownloadService}; the activity then finishes so the
+ * download continues from the notification.
+ */
 public class DownloadActivity extends ComponentActivity {
 
-    private static final int PERMISSION_REQUEST_CODE = 2;
-    private static final String CHANNEL_ID = "download_channel";
+    private static final int REQUEST_NOTIFICATION_PERMISSION = 100;
+    private static final int REQUEST_STORAGE_PERMISSION = 2;
 
     private String downloadUrl;
     private String suggestedFileName;
@@ -27,222 +34,95 @@ public class DownloadActivity extends ComponentActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Check for VIEW action with HTTP/HTTPS URL
-        String action = getIntent().getAction();
-        Uri data = getIntent().getData();
-        android.util.Log.d("DownloadActivity", "onCreate - action: " + action + ", data: " + data);
-
-        if (Intent.ACTION_VIEW.equals(action) && data != null) {
-            // ACTION_VIEW with data
-            String scheme = data.getScheme();
-            if ("http".equals(scheme) || "https".equals(scheme)) {
-                // Direct HTTP/HTTPS link
-                downloadUrl = data.toString();
-                extractFileName(downloadUrl);
-                android.util.Log.d("DownloadActivity", "Got HTTP URL from data: " + downloadUrl);
-            } else if ("content".equals(scheme) || "file".equals(scheme)) {
-                // File URI - try to extract URL from file content
-                downloadUrl = extractUrlFromFile(data);
-                if (downloadUrl == null) {
-                    Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                    finish();
-                    return;
-                }
-                extractFileName(downloadUrl);
-                android.util.Log.d("DownloadActivity", "Extracted URL from file: " + downloadUrl);
-            } else {
-                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                finish();
-                return;
-            }
-        } else if (Intent.ACTION_SEND.equals(action)) {
-            // Handle SEND action - check EXTRA_TEXT first, then ClipData, then EXTRA_STREAM
-            String text = getIntent().getStringExtra(Intent.EXTRA_TEXT);
-            if (text != null && (text.startsWith("http://") || text.startsWith("https://"))) {
-                downloadUrl = text.trim();
-                extractFileName(downloadUrl);
-                android.util.Log.d("DownloadActivity", "Got HTTP URL from EXTRA_TEXT: " + downloadUrl);
-            } else {
-                // Try to get URL from ClipData
-                android.content.ClipData clipData = getIntent().getClipData();
-                if (clipData != null && clipData.getItemCount() > 0) {
-                    Uri uri = clipData.getItemAt(0).getUri();
-                    if (uri != null) {
-                        String scheme = uri.getScheme();
-                        android.util.Log.d("DownloadActivity", "ClipData URI scheme: " + scheme + ", uri: " + uri);
-                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
-                            // Direct HTTP/HTTPS URL in ClipData
-                            downloadUrl = uri.toString();
-                            extractFileName(downloadUrl);
-                            android.util.Log.d("DownloadActivity", "Got HTTP URL from ClipData: " + downloadUrl);
-                        } else if ("content".equals(scheme) || "file".equals(scheme)) {
-                            // File URI - try to extract URL from file content
-                            downloadUrl = extractUrlFromFile(uri);
-                            if (downloadUrl == null) {
-                                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                                finish();
-                                return;
-                            }
-                            extractFileName(downloadUrl);
-                            android.util.Log.d("DownloadActivity", "Extracted URL from ClipData file: " + downloadUrl);
-                        }
-                    }
-                }
-            }
-            
-            // If still no URL from EXTRA_TEXT or ClipData, try EXTRA_STREAM
-            if (downloadUrl == null && getIntent().hasExtra(Intent.EXTRA_STREAM)) {
-                try {
-                    Uri streamUri = getIntent().getParcelableExtra(Intent.EXTRA_STREAM);
-                    if (streamUri != null) {
-                        String scheme = streamUri.getScheme();
-                        android.util.Log.d("DownloadActivity", "EXTRA_STREAM URI scheme: " + scheme + ", uri: " + streamUri);
-                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
-                            // Direct HTTP/HTTPS URL in EXTRA_STREAM
-                            downloadUrl = streamUri.toString();
-                            extractFileName(downloadUrl);
-                            android.util.Log.d("DownloadActivity", "Got HTTP URL from EXTRA_STREAM: " + downloadUrl);
-                        } else if ("content".equals(scheme) || "file".equals(scheme)) {
-                            // File URI - try to extract URL from file content
-                            downloadUrl = extractUrlFromFile(streamUri);
-                            if (downloadUrl == null) {
-                                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                                finish();
-                                return;
-                            }
-                            extractFileName(downloadUrl);
-                            android.util.Log.d("DownloadActivity", "Extracted URL from EXTRA_STREAM file: " + downloadUrl);
-                        }
-                    }
-                } catch (ClassCastException e) {
-                    android.util.Log.e("DownloadActivity", "Failed to get EXTRA_STREAM", e);
-                }
-            }
-            
-            // If still no URL, show error
-            if (downloadUrl == null) {
-                android.util.Log.e("DownloadActivity", "No valid URL found!");
-                Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
-                finish();
-                return;
-            }
-        } else {
-            // Unsupported action
-            android.util.Log.e("DownloadActivity", "Unsupported action: " + action);
+        downloadUrl = resolveDownloadUrl(getIntent());
+        if (downloadUrl == null) {
             Toast.makeText(this, R.string.toast_invalid_uri, Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
-        // No callback needed - DownloadService will show notifications directly
-        // This allows DownloadActivity to finish immediately and run in background
-
+        suggestedFileName = suggestFileName(downloadUrl);
         requestNotificationPermission();
     }
 
-    private void requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
-                return;
-            }
-        }
-        createNotificationChannel();
-        checkPermission();
-    }
+    /** Extracts the http(s) link from VIEW or SEND intents, including text files. */
+    private String resolveDownloadUrl(Intent intent) {
+        if (intent == null) return null;
+        String action = intent.getAction();
 
-    private void extractFileName(String url) {
-        if (suggestedFileName != null) return;
-
-        try {
-            Uri uri = Uri.parse(url);
-            String path = uri.getPath();
-            if (path != null && path.contains("/")) {
-                String name = path.substring(path.lastIndexOf('/') + 1);
-                if (!name.isEmpty() && name.contains(".")) {
-                    suggestedFileName = name;
-                    return;
-                }
+        if (Intent.ACTION_VIEW.equals(action)) {
+            Uri data = intent.getData();
+            if (IntentDataUtils.isHttpUri(data)) return data.toString();
+            if (IntentDataUtils.isLocalUri(data)) {
+                return IntentDataUtils.readUrlFromDocument(this, data);
             }
-        } catch (Exception e) {
-            // Ignore parsing errors
+            return null;
         }
 
-        // Default filename based on URL
-        String host = Uri.parse(url).getHost();
-        suggestedFileName = host != null ? host + "-download" : "download";
-    }
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            return null;
+        }
 
-    private String extractUrlFromFile(Uri fileUri) {
-        try {
-            java.io.InputStream inputStream = getContentResolver().openInputStream(fileUri);
-            if (inputStream == null) {
-                return null;
+        String sharedLink = IntentDataUtils.findHttpUrl(intent);
+        if (sharedLink != null) return sharedLink;
+
+        // A shared text/document can hold the link instead of carrying it as data.
+        for (Uri uri : IntentDataUtils.streamUris(intent)) {
+            if (IntentDataUtils.isLocalUri(uri)) {
+                String fromFile = IntentDataUtils.readUrlFromDocument(this, uri);
+                if (fromFile != null) return fromFile;
             }
-
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(inputStream, java.nio.charset.StandardCharsets.UTF_8)
-            );
-
-            StringBuilder content = new StringBuilder();
-            char[] buffer = new char[4096];
-            int bytesRead;
-            while ((bytesRead = reader.read(buffer)) != -1) {
-                content.append(buffer, 0, bytesRead);
-                // Limit reading to first 64KB to avoid performance issues
-                if (content.length() > 65536) {
-                    break;
+        }
+        ClipData clipData = intent.getClipData();
+        if (clipData != null) {
+            for (int i = 0; i < clipData.getItemCount(); i++) {
+                Uri uri = clipData.getItemAt(i).getUri();
+                if (IntentDataUtils.isLocalUri(uri)) {
+                    String fromFile = IntentDataUtils.readUrlFromDocument(this, uri);
+                    if (fromFile != null) return fromFile;
                 }
             }
-            reader.close();
-            inputStream.close();
-
-            // Try to find URL in the content using regex
-            String text = content.toString();
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                "https?://[^\\s<>\"'{}|\\\\^`\\[\\]]+",
-                java.util.regex.Pattern.CASE_INSENSITIVE
-            );
-            java.util.regex.Matcher matcher = pattern.matcher(text);
-            
-            if (matcher.find()) {
-                String url = matcher.group();
-                // Clean up trailing punctuation that might not be part of URL
-                url = url.replaceAll("[.,;!?]+$", "");
-                return url;
-            }
-        } catch (Exception e) {
-            android.util.Log.e("DownloadActivity", "Failed to extract URL from file", e);
         }
         return null;
     }
 
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                NotificationChannel channel = new NotificationChannel(
-                        CHANNEL_ID,
-                        getString(R.string.notification_channel_progress),
-                        NotificationManager.IMPORTANCE_DEFAULT
-                );
-                channel.setDescription(getString(R.string.notification_channel_result));
-                manager.createNotificationChannel(channel);
+    private String suggestFileName(String url) {
+        try {
+            String path = Uri.parse(url).getPath();
+            if (path != null) {
+                String name = path.substring(path.lastIndexOf('/') + 1);
+                if (name.contains(".")) {
+                    return URLDecoder.decode(name, StandardCharsets.UTF_8.name());
+                }
             }
+        } catch (Exception ignored) {
         }
+        String host = Uri.parse(url).getHost();
+        return host != null ? host + "-download" : "download";
     }
 
-    private void checkPermission() {
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_NOTIFICATION_PERMISSION);
+            return;
+        }
+        checkLegacyStoragePermission();
+    }
+
+    private void checkLegacyStoragePermission() {
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-            String[] permissions = new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE};
+            String[] permissions = {
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE};
             if (checkSelfPermission(permissions[0]) != PackageManager.PERMISSION_GRANTED
                     || checkSelfPermission(permissions[1]) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(permissions, PERMISSION_REQUEST_CODE);
+                requestPermissions(permissions, REQUEST_STORAGE_PERMISSION);
                 return;
             }
         }
-
         startDownload();
     }
 
@@ -251,79 +131,61 @@ public class DownloadActivity extends ComponentActivity {
         intent.putExtra(DownloadService.EXTRA_DOWNLOAD_URL, downloadUrl);
         intent.putExtra(DownloadService.EXTRA_FILE_NAME, suggestedFileName);
 
-        String callingPackage = null;
         Uri referrer = getReferrer();
-        if (referrer != null) callingPackage = referrer.getAuthority();
-        intent.putExtra(DownloadService.EXTRA_CALLING_PACKAGE, callingPackage);
+        intent.putExtra(DownloadService.EXTRA_CALLING_PACKAGE,
+                referrer != null ? referrer.getAuthority() : null);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
-        
-        // Finish immediately - service runs in background with notifications
-        android.util.Log.d("DownloadActivity", "Started download service, finishing activity");
+        startForegroundService(intent);
         finish();
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 100) {
-            if (grantResults.length > 0
-                    && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                createNotificationChannel();
-                checkPermission();
+
+        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
+            // The download itself does not need notifications; without them the
+            // user just loses progress updates, so a denial is only reported.
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                checkLegacyStoragePermission();
             } else {
-                showNotificationPermissionRequired();
+                showBlockingDialog(R.string.dialog_no_notification_permission_title,
+                        R.string.dialog_no_notification_permission_message);
             }
             return;
         }
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.length == 0) {
-                return;
-            }
 
+        if (requestCode == REQUEST_STORAGE_PERMISSION) {
+            if (grantResults.length == 0) return;
             boolean granted = true;
-            for (int grantResult : grantResults) {
-                granted &= grantResult == PackageManager.PERMISSION_GRANTED;
+            for (int result : grantResults) {
+                granted &= result == PackageManager.PERMISSION_GRANTED;
             }
             if (granted) {
                 startDownload();
             } else {
-                boolean isNight = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_YES) > 0;
-                int theme = isNight ? android.R.style.Theme_DeviceDefault_Dialog_Alert : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
-                new AlertDialog.Builder(this, theme)
-                        .setTitle(R.string.dialog_no_permission_title)
-                        .setMessage(R.string.dialog_no_permission_message)
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .setNeutralButton(R.string.dialog_no_permission_button_app_info, (dialog, which) -> {
-                            Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                            i.addCategory(Intent.CATEGORY_DEFAULT);
-                            i.setData(Uri.parse("package:" + getPackageName()));
-                            startActivity(i);
-                        })
-                        .setOnDismissListener((dialog -> finish()))
-                        .show();
+                showBlockingDialog(R.string.dialog_no_permission_title,
+                        R.string.dialog_no_permission_message);
             }
         }
     }
 
-    private void showNotificationPermissionRequired() {
+    private void showBlockingDialog(int titleRes, int messageRes) {
         boolean isNight = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_YES) > 0;
         int theme = isNight ? android.R.style.Theme_DeviceDefault_Dialog_Alert
                 : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
+
         new AlertDialog.Builder(this, theme)
-                .setTitle(R.string.dialog_no_notification_permission_title)
-                .setMessage(R.string.dialog_no_notification_permission_message)
+                .setTitle(titleRes)
+                .setMessage(messageRes)
                 .setNegativeButton(android.R.string.cancel, null)
                 .setNeutralButton(R.string.dialog_no_permission_button_app_info, (dialog, which) -> {
-                    Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                    i.addCategory(Intent.CATEGORY_DEFAULT);
-                    i.setData(Uri.parse("package:" + getPackageName()));
-                    startActivity(i);
+                    Intent settings = new Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + getPackageName()));
+                    settings.addCategory(Intent.CATEGORY_DEFAULT);
+                    startActivity(settings);
                 })
                 .setOnDismissListener(dialog -> finish())
                 .show();

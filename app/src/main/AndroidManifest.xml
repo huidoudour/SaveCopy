@@ -32,6 +32,11 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="content" />
         </intent>
+        <!-- Used to find an installer for a finished APK download -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
     </queries>
 
     <application
@@ -139,6 +144,14 @@
             android:exported="false"
             android:theme="@style/AppTheme.Dialog.Alert"
             android:label="@string/download_details_title" />
+
+        <!-- Notification tap target: verifies the file, then hands it to the installer. -->
+        <activity
+            android:name=".OpenFileActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/AppTheme.NoDisplay" />
 
         <service
             android:name=".SaveService"

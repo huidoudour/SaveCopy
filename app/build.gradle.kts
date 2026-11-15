@@ -114,15 +114,12 @@ android {
 dependencies {
     implementation(libs.activity.ktx)
     implementation(libs.appcompat)
-    implementation(libs.constraintlayout)
     implementation(libs.material)
     implementation(libs.annotation)
     testImplementation(libs.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
 
-    // SAF
-    implementation(libs.documentfile)
     // MTDataFilesProvider
     implementation(libs.mtdatafilesprovider)
 }

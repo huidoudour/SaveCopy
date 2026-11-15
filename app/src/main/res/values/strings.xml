@@ -20,6 +20,10 @@
     <string name="download_details_total_unknown">Unknown</string>
     <string name="download_details_average_speed">Average speed: %s</string>
     <string name="download_details_elapsed">Elapsed: %s</string>
+    <string name="toast_file_unavailable">The downloaded file is no longer available</string>
+    <string name="toast_no_installer">No app available to install this package</string>
+    <string name="toast_no_app_to_open">No app available to open this file</string>
+    <string name="toast_saved_multiple">Saved %1$d files to Download</string>
     <string name="notification_saving_title">Saving copy of %s</string>
     <string name="notification_saved_title">Saved copy for %1$s</string>
     <string name="notification_saved_text">The copy is located at %1$s</string>
