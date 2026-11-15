@@ -21,9 +21,8 @@ fun Project.gitHash(): String = try {
     SimpleDateFormat("MMddHHmm").format(Date())
 }
 
-val appVersionCode = baseVersionCode + gitCommitCount()
-val appVersionName = "${baseVersionName}.${baseVersionCode+gitCommitCount()}.${gitHash()}-β"
 val appVersionCode = gitCommitCount()
+val appVersionName = "${baseVersionName}.${gitCommitCount()}.${gitHash()}"
 
 val versionLine = "$appVersionName($appVersionCode)"
 
