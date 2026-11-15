@@ -1,8 +1,9 @@
 package app.rikka.savecopy;
 
-import android.app.IntentService;
+import android.app.Service;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -11,6 +12,7 @@ import android.content.res.Resources;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Environment;
+import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
@@ -26,13 +28,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Copies the bytes behind a received URI into the user's Download folder (or a
  * custom SAF folder). All URIs of a request are handled in one pass and the
  * result is reported once, so a multi-file share does not fire a toast storm.
  */
-public class SaveService extends IntentService {
+public class SaveService extends Service {
 
     static final String CALLING_PACKAGE = "callingPackage";
 
@@ -45,6 +49,9 @@ public class SaveService extends IntentService {
     /** Static callback keeps the activity informed on ROMs that throttle broadcasts. */
     private static SaveCallback sCallback;
 
+    /** IntentService replacement: requests are handled one after another. */
+    private ExecutorService executor;
+
     public interface SaveCallback {
         void onSaveComplete(String message, String error);
     }
@@ -53,13 +60,39 @@ public class SaveService extends IntentService {
         sCallback = callback;
     }
 
-    public SaveService() {
-        super("save-thread");
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        executor = Executors.newSingleThreadExecutor(
+                runnable -> new Thread(runnable, "save-thread"));
     }
 
     @Override
-    protected void onHandleIntent(Intent intent) {
-        onSave(intent);
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent == null) {
+            stopSelfResult(startId);
+            return START_NOT_STICKY;
+        }
+        executor.execute(() -> {
+            try {
+                onSave(intent);
+            } finally {
+                stopSelfResult(startId);
+            }
+        });
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        executor.shutdown();
+        super.onDestroy();
+    }
+
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
     }
 
     private void onSave(Intent intent) {
@@ -297,10 +330,13 @@ public class SaveService extends IntentService {
     @Nullable
     private String loadLabelForPackage(@NonNull String packageName) {
         try {
-            Configuration configuration = new Configuration();
-            configuration.locale = Locale.ENGLISH;
-            Resources resources = getPackageManager().getResourcesForApplication(packageName);
-            resources.updateConfiguration(configuration, getResources().getDisplayMetrics());
+            // Force English so the folder name does not change with the UI locale.
+            Context packageContext = createPackageContext(packageName, 0);
+            Configuration configuration =
+                    new Configuration(packageContext.getResources().getConfiguration());
+            configuration.setLocale(Locale.ENGLISH);
+            Resources resources =
+                    packageContext.createConfigurationContext(configuration).getResources();
 
             ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
             if (info.labelRes != 0) return resources.getString(info.labelRes);

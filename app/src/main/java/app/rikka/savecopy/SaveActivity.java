@@ -11,7 +11,8 @@ import android.os.Bundle;
 import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
-import androidx.annotation.NonNull;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 /**
  * Invisible activity that forwards a received URI to {@link SaveService} and
@@ -20,11 +21,26 @@ import androidx.annotation.NonNull;
  */
 public class SaveActivity extends ComponentActivity {
 
-    private static final int REQUEST_STORAGE_PERMISSION = 1;
+    private ActivityResultLauncher<String[]> storagePermissionLauncher;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        storagePermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                result -> {
+                    if (result.isEmpty()) return;
+                    boolean granted =
+                            Boolean.TRUE.equals(result.get(Manifest.permission.READ_EXTERNAL_STORAGE))
+                                    && Boolean.TRUE.equals(
+                                    result.get(Manifest.permission.WRITE_EXTERNAL_STORAGE));
+                    if (granted) {
+                        startSave();
+                    } else {
+                        showPermissionDeniedDialog();
+                    }
+                });
 
         SaveService.setCallback((message, error) -> runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
@@ -46,12 +62,23 @@ public class SaveActivity extends ComponentActivity {
 
         // The app is usually the "always open" choice for its own actions; clear
         // that so the chooser stays reachable for the next request.
+        clearPreferredActivities();
+
+        checkPermission();
+    }
+
+    /**
+     * Keeps the legacy preferred-activity state clean. The platform deprecated
+     * this API in Android 14 without a general-purpose replacement (RoleManager
+     * only covers specific roles), and it is still the only way to undo an
+     * "always" choice made on older releases.
+     */
+    @SuppressWarnings("deprecation")
+    private void clearPreferredActivities() {
         try {
             getPackageManager().clearPackagePreferredActivities(getPackageName());
         } catch (Exception ignored) {
         }
-
-        checkPermission();
     }
 
     private void checkPermission() {
@@ -61,7 +88,7 @@ public class SaveActivity extends ComponentActivity {
                     Manifest.permission.WRITE_EXTERNAL_STORAGE};
             if (checkSelfPermission(permissions[0]) != PackageManager.PERMISSION_GRANTED
                     || checkSelfPermission(permissions[1]) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(permissions, REQUEST_STORAGE_PERMISSION);
+                storagePermissionLauncher.launch(permissions);
                 return;
             }
         }
@@ -104,22 +131,7 @@ public class SaveActivity extends ComponentActivity {
         SaveService.setCallback(null);
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_STORAGE_PERMISSION) return;
-        if (grantResults.length == 0) return;
-
-        boolean granted = true;
-        for (int result : grantResults) {
-            granted &= result == PackageManager.PERMISSION_GRANTED;
-        }
-        if (granted) {
-            startSave();
-            return;
-        }
-
+    private void showPermissionDeniedDialog() {
         boolean isNight = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_YES) > 0;
         int theme = isNight ? android.R.style.Theme_DeviceDefault_Dialog_Alert

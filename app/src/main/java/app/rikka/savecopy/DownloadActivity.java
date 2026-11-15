@@ -12,6 +12,8 @@ import android.os.Bundle;
 import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -24,8 +26,8 @@ import java.nio.charset.StandardCharsets;
  */
 public class DownloadActivity extends ComponentActivity {
 
-    private static final int REQUEST_NOTIFICATION_PERMISSION = 100;
-    private static final int REQUEST_STORAGE_PERMISSION = 2;
+    private ActivityResultLauncher<String[]> notificationPermissionLauncher;
+    private ActivityResultLauncher<String[]> storagePermissionLauncher;
 
     private String downloadUrl;
     private String suggestedFileName;
@@ -33,6 +35,36 @@ public class DownloadActivity extends ComponentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        notificationPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                result -> {
+                    // The download itself does not need notifications; without
+                    // them the user only loses progress updates, so a denial is
+                    // reported instead of silently continuing.
+                    if (Boolean.TRUE.equals(result.get(Manifest.permission.POST_NOTIFICATIONS))) {
+                        checkLegacyStoragePermission();
+                    } else {
+                        showBlockingDialog(R.string.dialog_no_notification_permission_title,
+                                R.string.dialog_no_notification_permission_message);
+                    }
+                });
+
+        storagePermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                result -> {
+                    if (result.isEmpty()) return;
+                    boolean granted =
+                            Boolean.TRUE.equals(result.get(Manifest.permission.READ_EXTERNAL_STORAGE))
+                                    && Boolean.TRUE.equals(
+                                    result.get(Manifest.permission.WRITE_EXTERNAL_STORAGE));
+                    if (granted) {
+                        startDownload();
+                    } else {
+                        showBlockingDialog(R.string.dialog_no_permission_title,
+                                R.string.dialog_no_permission_message);
+                    }
+                });
 
         downloadUrl = resolveDownloadUrl(getIntent());
         if (downloadUrl == null) {
@@ -105,8 +137,8 @@ public class DownloadActivity extends ComponentActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
-                    REQUEST_NOTIFICATION_PERMISSION);
+            notificationPermissionLauncher.launch(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS});
             return;
         }
         checkLegacyStoragePermission();
@@ -119,7 +151,7 @@ public class DownloadActivity extends ComponentActivity {
                     Manifest.permission.WRITE_EXTERNAL_STORAGE};
             if (checkSelfPermission(permissions[0]) != PackageManager.PERMISSION_GRANTED
                     || checkSelfPermission(permissions[1]) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(permissions, REQUEST_STORAGE_PERMISSION);
+                storagePermissionLauncher.launch(permissions);
                 return;
             }
         }
@@ -137,37 +169,6 @@ public class DownloadActivity extends ComponentActivity {
 
         startForegroundService(intent);
         finish();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
-            // The download itself does not need notifications; without them the
-            // user just loses progress updates, so a denial is only reported.
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                checkLegacyStoragePermission();
-            } else {
-                showBlockingDialog(R.string.dialog_no_notification_permission_title,
-                        R.string.dialog_no_notification_permission_message);
-            }
-            return;
-        }
-
-        if (requestCode == REQUEST_STORAGE_PERMISSION) {
-            if (grantResults.length == 0) return;
-            boolean granted = true;
-            for (int result : grantResults) {
-                granted &= result == PackageManager.PERMISSION_GRANTED;
-            }
-            if (granted) {
-                startDownload();
-            } else {
-                showBlockingDialog(R.string.dialog_no_permission_title,
-                        R.string.dialog_no_permission_message);
-            }
-        }
     }
 
     private void showBlockingDialog(int titleRes, int messageRes) {

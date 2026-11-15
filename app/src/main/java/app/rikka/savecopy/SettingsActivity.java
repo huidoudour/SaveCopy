@@ -1,16 +1,19 @@
 package app.rikka.savecopy;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
-import android.provider.DocumentsContract;
 import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import app.rikka.savecopy.databinding.ActivitySettingsBinding;
@@ -22,8 +25,8 @@ import app.rikka.savecopy.databinding.ActivitySettingsBinding;
 public class SettingsActivity extends ComponentActivity {
 
     private static final String TAG = "SettingsActivity";
-    private static final int REQUEST_SELECT_FOLDER = 1001;
 
+    private ActivityResultLauncher<Uri> folderPickerLauncher;
     private ActivitySettingsBinding binding;
     private SharedPreferences preferences;
     private boolean initializing = true;
@@ -31,6 +34,8 @@ public class SettingsActivity extends ComponentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        folderPickerLauncher = registerForActivityResult(
+                new FolderPickerContract(), this::onFolderSelected);
         binding = ActivitySettingsBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
@@ -105,29 +110,19 @@ public class SettingsActivity extends ComponentActivity {
     }
 
     private void openFolderPicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-
+        Uri initialUri = null;
         String savedPath = preferences.getString(Settings.KEY_CUSTOM_FOLDER_PATH, null);
         if (savedPath != null) {
             try {
-                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(savedPath));
+                initialUri = Uri.parse(savedPath);
             } catch (Exception e) {
                 Log.w(TAG, "Unable to restore the last folder", e);
             }
         }
-
-        startActivityForResult(intent, REQUEST_SELECT_FOLDER);
+        folderPickerLauncher.launch(initialUri);
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_SELECT_FOLDER || resultCode != RESULT_OK || data == null) return;
-
-        Uri treeUri = data.getData();
+    private void onFolderSelected(@Nullable Uri treeUri) {
         if (treeUri == null) return;
 
         try {
@@ -143,5 +138,21 @@ public class SettingsActivity extends ComponentActivity {
         renderFolderPath(uriString);
         Toast.makeText(this, getString(R.string.toast_folder_selected, treeUri.getPath()),
                 Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * {@link ActivityResultContracts.OpenDocumentTree} variant that keeps the
+     * read/write/persistable grant flags the previous implementation requested.
+     */
+    private static final class FolderPickerContract
+            extends ActivityResultContracts.OpenDocumentTree {
+        @NonNull
+        @Override
+        public Intent createIntent(@NonNull Context context, @Nullable Uri input) {
+            return super.createIntent(context, input)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        }
     }
 }

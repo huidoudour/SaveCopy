@@ -16,6 +16,7 @@ import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.database.Cursor;
+import android.graphics.drawable.Icon;
 import android.net.ConnectivityManager;
 import android.net.ProxyInfo;
 import android.net.Uri;
@@ -267,6 +268,9 @@ public class DownloadService extends Service {
                 this, REQUEST_CANCEL, cancelIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        Icon cancelIcon = Icon.createWithResource(this,
+                android.R.drawable.ic_menu_close_clear_cancel);
+
         return newReplyBuilder()
                 .setContentTitle(getString(R.string.notification_working_title))
                 .setContentText(getString(R.string.toast_start_download, truncateUrl(url)))
@@ -274,8 +278,8 @@ public class DownloadService extends Service {
                 .setContentIntent(detailsPendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel,
-                        getString(android.R.string.cancel), cancelPendingIntent)
+                .addAction(new Notification.Action.Builder(cancelIcon,
+                        getString(android.R.string.cancel), cancelPendingIntent).build())
                 .setProgress(100, 0, true);
     }
 
@@ -939,10 +943,13 @@ public class DownloadService extends Service {
     @Nullable
     private String loadLabelForPackage(String packageName) {
         try {
-            Configuration configuration = new Configuration();
-            configuration.locale = Locale.ENGLISH;
-            Resources resources = getPackageManager().getResourcesForApplication(packageName);
-            resources.updateConfiguration(configuration, getResources().getDisplayMetrics());
+            // Force English so the folder name does not change with the UI locale.
+            Context packageContext = createPackageContext(packageName, 0);
+            Configuration configuration =
+                    new Configuration(packageContext.getResources().getConfiguration());
+            configuration.setLocale(Locale.ENGLISH);
+            Resources resources =
+                    packageContext.createConfigurationContext(configuration).getResources();
 
             ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
             if (info.labelRes != 0) return resources.getString(info.labelRes);

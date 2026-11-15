@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Parcelable;
 import android.util.Log;
 
@@ -131,7 +132,7 @@ public final class IntentDataUtils {
         List<Uri> uris = new ArrayList<>();
         if (intent == null || !intent.hasExtra(Intent.EXTRA_STREAM)) return uris;
 
-        Object raw = intent.getExtras() != null ? intent.getExtras().get(Intent.EXTRA_STREAM) : null;
+        Object raw = streamExtra(intent);
         if (raw instanceof Uri) {
             uris.add((Uri) raw);
         } else if (raw instanceof ArrayList) {
@@ -144,6 +145,19 @@ public final class IntentDataUtils {
             }
         }
         return uris;
+    }
+
+    /**
+     * Reads {@code EXTRA_STREAM} without assuming its shape: senders use a
+     * single Uri, an {@code ArrayList<Uri>} or a {@code Parcelable[]}. Bundle's
+     * type-safe getters need the shape up front (and only exist from API 33),
+     * so the shape-agnostic getter is still the right tool here.
+     */
+    @SuppressWarnings("deprecation")
+    @Nullable
+    private static Object streamExtra(Intent intent) {
+        Bundle extras = intent.getExtras();
+        return extras != null ? extras.get(Intent.EXTRA_STREAM) : null;
     }
 
     /**
