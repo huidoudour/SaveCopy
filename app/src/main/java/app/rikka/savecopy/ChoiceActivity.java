@@ -26,7 +26,7 @@ public class ChoiceActivity extends ComponentActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        View content = LayoutInflater.from(this).inflate(R.layout.choice_activity, null);
+        View content = LayoutInflater.from(this).inflate(R.layout.activity_choice, null);
         TextView saveCopy = content.findViewById(R.id.btn_save_copy);
         TextView downloadCopy = content.findViewById(R.id.btn_download_copy);
 

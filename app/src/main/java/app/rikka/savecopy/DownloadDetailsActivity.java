@@ -8,7 +8,7 @@ import androidx.activity.ComponentActivity;
 
 import java.util.Locale;
 
-import app.rikka.savecopy.databinding.DownloadDetailsActivityBinding;
+import app.rikka.savecopy.databinding.ActivityDownloadBinding;
 
 /** A dialog-style, read-only view of the foreground download service. */
 public class DownloadDetailsActivity extends ComponentActivity {
@@ -16,7 +16,7 @@ public class DownloadDetailsActivity extends ComponentActivity {
     private static final long REFRESH_INTERVAL_MS = 250;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private DownloadDetailsActivityBinding binding;
+    private ActivityDownloadBinding binding;
     private final Runnable refreshRunnable = new Runnable() {
         @Override
         public void run() {
@@ -31,7 +31,7 @@ public class DownloadDetailsActivity extends ComponentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        binding = DownloadDetailsActivityBinding.inflate(getLayoutInflater());
+        binding = ActivityDownloadBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         setTitle(R.string.download_details_title);
         binding.downloadDetailsClose.setOnClickListener(v -> finish());

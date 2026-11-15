@@ -6,7 +6,7 @@
     android:orientation="vertical"
     android:paddingTop="8dp"
     android:paddingBottom="8dp"
-    tools:context=".SettingsActivity">
+    tools:context=".InfoActivity">
 
     <TextView
         android:id="@android:id/text1"

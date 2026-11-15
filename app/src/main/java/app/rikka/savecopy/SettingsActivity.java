@@ -13,7 +13,7 @@ import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.Nullable;
 
-import app.rikka.savecopy.databinding.SettingsActivityBinding;
+import app.rikka.savecopy.databinding.ActivitySettingsBinding;
 
 /**
  * Two mutually exclusive destinations: {@code Download/<app>} or a custom SAF
@@ -24,14 +24,14 @@ public class SettingsActivity extends ComponentActivity {
     private static final String TAG = "SettingsActivity";
     private static final int REQUEST_SELECT_FOLDER = 1001;
 
-    private SettingsActivityBinding binding;
+    private ActivitySettingsBinding binding;
     private SharedPreferences preferences;
     private boolean initializing = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        binding = SettingsActivityBinding.inflate(getLayoutInflater());
+        binding = ActivitySettingsBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
         preferences = getSharedPreferences(Settings.FILE_NAME, MODE_PRIVATE);
