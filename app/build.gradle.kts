@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val baseVersionName = "26.2.3"
+val baseVersionName = "26.2.4"
 val backVersionCode = 20
 
 fun Project.gitCommitCount(): Int = try {
