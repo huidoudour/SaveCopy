@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val baseVersionCode = 10
 val baseVersionName = "26.2.3"
 val backVersionCode = 20
 
