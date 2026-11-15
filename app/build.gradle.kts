@@ -23,6 +23,7 @@ fun Project.gitHash(): String = try {
 
 val appVersionCode = baseVersionCode + gitCommitCount()
 val appVersionName = "${baseVersionName}.${baseVersionCode+gitCommitCount()}.${gitHash()}-β"
+val appVersionCode = gitCommitCount()
 
 val versionLine = "$appVersionName($appVersionCode)"
 
